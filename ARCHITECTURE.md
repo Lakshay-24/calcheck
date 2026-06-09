@@ -1,0 +1,304 @@
+# CalCheck - Architecture & Data Flow
+
+## System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          CALCHECK PWA                            │
+│                                                                   │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │                    FRONTEND (React 18)                      │ │
+│  │                                                              │ │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │ │
+│  │  │ ScanScreen   │  │ProgressScrn  │  │ ProfileScrn  │     │ │
+│  │  │ (Default)    │  │              │  │              │     │ │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘     │ │
+│  │         │                                                   │ │
+│  │         ├─→ CameraModal (full-screen)                     │ │
+│  │         ├─→ AnalysisScreen (loading)                      │ │
+│  │         └─→ ResultsScreen (display)                       │ │
+│  │                                                              │ │
+│  │  ┌──────────────────────────────────────────────────────┐ │ │
+│  │  │              React Router v6                          │ │ │
+│  │  │  Route: / | /progress | /profile                     │ │ │
+│  │  └──────────────────────────────────────────────────────┘ │ │
+│  │                                                              │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                   │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │                    SERVICES LAYER                           │ │
+│  │                                                              │ │
+│  │  ┌──────────────────┐  ┌──────────────────┐               │ │
+│  │  │ supabase.js      │  │ gemini.js        │               │ │
+│  │  │ ────────────     │  │ ──────────       │               │ │
+│  │  │ • signInGoogle   │  │ • analyzeFood    │               │ │
+│  │  │ • signOut        │  │ • compress img   │               │ │
+│  │  │ • getCurrentUser │  │ • parse JSON     │               │ │
+│  │  └──────────────────┘  └──────────────────┘               │ │
+│  │                                                              │ │
+│  │  ┌──────────────────┐  ┌──────────────────┐               │ │
+│  │  │ database.js      │  │ useCamera.js     │               │ │
+│  │  │ ──────────       │  │ ────────────     │               │ │
+│  │  │ • saveMealLog    │  │ • getUserMedia   │               │ │
+│  │  │ • getMealLogs    │  │ • capturePhoto   │               │ │
+│  │  │ • calculateTotals│  │ • permissions    │               │ │
+│  │  └──────────────────┘  └──────────────────┘               │ │
+│  │                                                              │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                   │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │              BROWSER APIS                                   │ │
+│  │  • IndexedDB (offline cache)                              │ │
+│  │  • localStorage (preferences)                             │ │
+│  │  • Canvas API (image processing)                          │ │
+│  │  • Service Worker (PWA)                                   │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+         ▼                    ▼                    ▼
+      SUPABASE            GOOGLE                DEVICE
+      Backend             Gemini                Camera
+```
+
+## Data Flow: Scanning Food
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    USER TAPS "SCAN FOOD"                     │
+└─────────────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ CameraModal opens (full-screen)                              │
+│ useCamera hook activates video stream                        │
+│ navigator.mediaDevices.getUserMedia() called                │
+└─────────────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ User clicks shutter button                                   │
+│ capturePhoto() draws video frame to canvas                  │
+│ toDataURL('image/jpeg', 0.8) generates base64              │
+└─────────────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ AnalysisScreen appears: "Analyzing your meal..."            │
+│ compressImage() reduces base64 to <500KB                   │
+└─────────────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Fetch to Google Gemini API                                   │
+│ POST /v1beta/models/gemini-1.5-flash:generateContent       │
+│ Body: { food image + structured prompt }                    │
+└─────────────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Gemini returns JSON response:                               │
+│ {                                                            │
+│   "food_name": "Chicken Biryani",                           │
+│   "calories": 824,                                           │
+│   "protein": 37,                                             │
+│   "carbs": 91,                                               │
+│   "fat": 28,                                                 │
+│   "meal_score": 68,                                          │
+│   "protein_level": "Medium",                                 │
+│   "recommended_for": "Muscle Gain"                           │
+│ }                                                            │
+└─────────────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ ResultsScreen displays nutrition data                        │
+│ User clicks "Save Meal"                                      │
+└─────────────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ saveMealLog() stores in Supabase:                           │
+│ INSERT into meal_logs {                                      │
+│   user_id, timestamp, food_name, calories, ...              │
+│ }                                                            │
+└─────────────────────────────────────────────────────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ getMealLogsToday() fetches all meals from today             │
+│ calculateDailyTotals() sums calories & protein              │
+│ ProgressScreen updates with new totals                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Database Schema
+
+```
+┌──────────────────────────────────────────────────┐
+│              USERS TABLE                          │
+├──────────────────────────────────────────────────┤
+│ id (UUID) - PK, FK to auth.users                 │
+│ email (TEXT) - UNIQUE                            │
+│ goal (TEXT) - 'fat_loss'|'muscle_gain'|'maint'  │
+│ calorie_target (INT) - default 2500              │
+│ protein_target (INT) - default 150               │
+│ subscription_status (TEXT) - 'free'|'premium'   │
+│ subscription_end_date (TIMESTAMP) - nullable    │
+│ created_at (TIMESTAMP)                           │
+└──────────────────────────────────────────────────┘
+             ▼
+             │ 1:Many
+             ▼
+┌──────────────────────────────────────────────────┐
+│           MEAL_LOGS TABLE                         │
+├──────────────────────────────────────────────────┤
+│ id (UUID) - PK                                   │
+│ user_id (UUID) - FK to users                     │
+│ timestamp (TIMESTAMP)                            │
+│ food_name (TEXT)                                 │
+│ calories (INT)                                   │
+│ protein (INT)                                    │
+│ carbs (INT)                                      │
+│ fat (INT)                                        │
+│ meal_score (INT) - 0-100                         │
+│ protein_level (TEXT)                             │
+│ recommended_for (TEXT)                           │
+└──────────────────────────────────────────────────┘
+             ▼
+             │ 1:Many
+             ▼
+┌──────────────────────────────────────────────────┐
+│        SCAN_COUNTERS TABLE                        │
+├──────────────────────────────────────────────────┤
+│ id (UUID) - PK                                   │
+│ user_id (UUID) - FK to users                     │
+│ date (DATE)                                      │
+│ scan_count (INT)                                 │
+│ UNIQUE(user_id, date)                            │
+└──────────────────────────────────────────────────┘
+```
+
+## Authentication Flow
+
+```
+┌──────────────────────────────────────────────┐
+│ User: No account                              │
+└──────────────────────────────────────────────┘
+               ▼
+┌──────────────────────────────────────────────┐
+│ Onboarding Screen                            │
+│ "Snap food. Track calories & protein."      │
+│ Button: "Start Scanning"                     │
+└──────────────────────────────────────────────┘
+               ▼
+┌──────────────────────────────────────────────┐
+│ Scan Screen                                   │
+│ (No authentication required yet)              │
+│ Take photo → Analyze → Show Results          │
+└──────────────────────────────────────────────┘
+               ▼
+┌──────────────────────────────────────────────┐
+│ Results Screen                                │
+│ "Save meal and track your daily calories"   │
+│ Button: "Continue with Google"               │
+└──────────────────────────────────────────────┘
+               ▼
+┌──────────────────────────────────────────────┐
+│ Google OAuth Flow                             │
+│ supabase.auth.signInWithOAuth('google')     │
+│ Redirects to Google login                    │
+└──────────────────────────────────────────────┘
+               ▼
+┌──────────────────────────────────────────────┐
+│ Session Created                               │
+│ getOrCreateUserProfile() called              │
+│ User inserted into users table               │
+└──────────────────────────────────────────────┘
+               ▼
+┌──────────────────────────────────────────────┐
+│ Meal saved to database                        │
+│ Progress tracking enabled                     │
+│ Subscription check happens                    │
+└──────────────────────────────────────────────┘
+```
+
+## Component Hierarchy
+
+```
+App (Router)
+├── OnboardingScreen (first launch)
+├── ScanScreen (default tab)
+│   ├── TodaysSummary (progress card)
+│   ├── ProgressBar (calorie bar)
+│   ├── ProgressBar (protein bar)
+│   └── CameraModal (opens full-screen)
+│       ├── AnalysisScreen (loading)
+│       └── ResultsScreen (results)
+│           ├── Badge (protein level)
+│           ├── Badge (recommended for)
+│           └── Buttons (save, scan again)
+├── ProgressScreen (tab: /progress)
+│   ├── MealCard (item)
+│   ├── MealCard (item)
+│   └── Chart (7-day history)
+├── ProfileScreen (tab: /profile)
+│   ├── UserInfo
+│   ├── GoalSettings
+│   └── Logout Button
+└── BottomNav
+    ├── Tab: Scan (/)
+    ├── Tab: Progress (/progress)
+    └── Tab: Profile (/profile)
+```
+
+## Deployment Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│         VERCEL / NETLIFY (CDN)                  │
+│                                                  │
+│  • Build: npm run build                         │
+│  • Output: dist/ (React + Vite)                │
+│  • Service Worker: Generated by PWA plugin      │
+│  • Icons: 192x192, 512x512                      │
+│  • HTTPS: Automatic                             │
+│  • Domain: calcheck.app                         │
+│                                                  │
+└─────────────────────────────────────────────────┘
+         ▼              ▼              ▼
+    SUPABASE       GOOGLE API      RAZORPAY
+    Backend        Gemini Vision   Payments
+```
+
+## Performance Optimization
+
+```
+User Action Timeline:
+
+0ms     User opens app
+├─ Load JS: 200-300ms (React + Vite)
+├─ Auth check: 100-200ms (Supabase)
+├─ First paint: <1000ms
+└─ Interactive: <2000ms ✓
+
+1000ms  User taps "Open Camera"
+├─ Camera permission: 100-500ms
+├─ Video stream: 50-100ms
+└─ Display: <200ms ✓
+
+2000ms  User takes photo
+├─ Canvas draw: 50ms
+├─ toDataURL: 100-200ms
+├─ Compression: 100-300ms
+└─ API call: 2000-5000ms (Gemini)
+
+7000ms  Gemini response
+├─ Parse JSON: 50ms
+├─ Display results: <200ms
+└─ Ready to save: <100ms ✓
+
+Total: ~7-10 seconds (acceptable for AI analysis)
+```
+
+---
+
+**This architecture ensures:**
+- ✅ Fast UI interactions (<200ms)
+- ✅ Scalable data structure
+- ✅ Offline-ready (PWA)
+- ✅ Secure (RLS policies)
+- ✅ Global CDN distribution
+- ✅ Mobile-optimized
+
