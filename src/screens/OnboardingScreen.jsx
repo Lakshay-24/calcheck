@@ -1,28 +1,10 @@
-import React, { useState } from 'react'
+import React from 'react'
 import { ChevronRight } from 'lucide-react'
 
 export default function OnboardingScreen({ onComplete }) {
-  const [isLoading, setIsLoading] = useState(false)
-
-  const handleGetStarted = async () => {
-    setIsLoading(true)
-    // Simulate permission check
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-        audio: false
-      })
-      stream.getTracks().forEach(track => track.stop())
-      localStorage.setItem('calcheck-onboarded', 'true')
-      onComplete?.()
-    } catch (error) {
-      console.error('Camera permission needed:', error)
-      // Still complete onboarding even if permission denied
-      localStorage.setItem('calcheck-onboarded', 'true')
-      onComplete?.()
-    } finally {
-      setIsLoading(false)
-    }
+  const handleGetStarted = () => {
+    localStorage.setItem('calcheck-onboarded', 'true')
+    onComplete?.()
   }
 
   return (
@@ -95,20 +77,10 @@ export default function OnboardingScreen({ onComplete }) {
         {/* CTA Button */}
         <button
           onClick={handleGetStarted}
-          disabled={isLoading}
-          className="w-full max-w-sm bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold py-4 px-8 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed active:scale-95"
+          className="w-full max-w-sm bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold py-4 px-8 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 flex items-center justify-center gap-2 active:scale-95"
         >
-          {isLoading ? (
-            <>
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-              <span>Requesting Permission...</span>
-            </>
-          ) : (
-            <>
-              <span>Get Started</span>
-              <ChevronRight size={20} className="transition-transform group-hover:translate-x-1" />
-            </>
-          )}
+          <span>Get Started</span>
+          <ChevronRight size={20} className="transition-transform group-hover:translate-x-1" />
         </button>
 
         {/* Privacy note */}

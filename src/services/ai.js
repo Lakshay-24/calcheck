@@ -1,6 +1,8 @@
 import { supabase } from './supabase'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK_AI === 'true'
+const MAX_ANALYSIS_IMAGE_SIZE = 1600
+const ANALYSIS_JPEG_QUALITY = 0.85
 
 export const MOCK_FOOD_ANALYSIS = {
   food_name: 'Chole Bhature (mock)',
@@ -34,8 +36,8 @@ const compressImage = async (base64Image) => {
       let width = img.width
       let height = img.height
 
-      const maxWidth = 1024
-      const maxHeight = 1024
+      const maxWidth = MAX_ANALYSIS_IMAGE_SIZE
+      const maxHeight = MAX_ANALYSIS_IMAGE_SIZE
 
       if (width > maxWidth || height > maxHeight) {
         const ratio = Math.min(maxWidth / width, maxHeight / height)
@@ -51,7 +53,7 @@ const compressImage = async (base64Image) => {
 
       resolve(
         canvas
-          .toDataURL('image/jpeg', 0.7)
+          .toDataURL('image/jpeg', ANALYSIS_JPEG_QUALITY)
           .split(',')[1]
       )
     }

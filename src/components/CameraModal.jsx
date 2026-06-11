@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
-import { useCamera } from '../hooks/useCamera'
 import { analyzeFood } from '../services/ai'
 import { saveMealLog, getOrCreateUserProfile } from '../services/database'
 import { signInWithGoogle } from '../services/supabase'
@@ -32,16 +31,19 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
   const [analysisResult, setAnalysisResult] = useState(null)
   const [error, setError] = useState(null)
   const [isSaving, setIsSaving] = useState(false)
-
-  const { videoRef, canvasRef, isActive, setIsActive, capturePhoto, hasPermission, requestPermission } = useCamera()
+  const [cameraError, setCameraError] = useState(null)
+  const videoRef = useRef(null)
+  const canvasRef = useRef(null)
+  const streamRef = useRef(null)
 
   useEffect(() => {
     if (!isOpen) {
-      setIsActive(false)
+      stopDesktopCamera()
       return
     }
 
     setError(null)
+    setCameraError(null)
     setStage('camera')
     setCapturedImage(null)
     setAnalysisResult(null)
@@ -52,10 +54,44 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
       return
     }
 
-    if (hasPermission === null) {
-      requestPermission()
-    }
+    startDesktopCamera()
+
+    return stopDesktopCamera
   }, [isOpen, pendingImage])
+
+  const startDesktopCamera = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera is not available in this browser. Use Upload Image instead.')
+      return
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      })
+
+      streamRef.current = stream
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+      }
+    } catch (err) {
+      console.error('Camera access denied:', err)
+      setCameraError('Camera access was blocked. Allow camera access or use Upload Image.')
+    }
+  }
+
+  const stopDesktopCamera = () => {
+    if (!streamRef.current) return
+
+    streamRef.current.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+  }
 
   const analyzePhoto = async (base64Image) => {
     try {
@@ -71,15 +107,6 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
     }
   }
 
-  const handleCapture = () => {
-    const photo = capturePhoto()
-    if (photo) {
-      setCapturedImage(photo)
-      setIsActive(false)
-      analyzePhoto(photo)
-    }
-  }
-
   const persistMeal = async (mealResult) => {
     await getOrCreateUserProfile(user.id, user.email)
     await saveMealLog(user.id, mealResult)
@@ -88,20 +115,37 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
     handleClose()
   }
 
-  const handleSaveMeal = async () => {
-    if (!analysisResult) return
+  const handleCapture = () => {
+    if (!videoRef.current || !canvasRef.current) return
+
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    const context = canvas.getContext('2d')
+
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    context.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+    const photo = canvas.toDataURL('image/jpeg', 0.92)
+    setCapturedImage(photo)
+    stopDesktopCamera()
+    analyzePhoto(photo)
+  }
+
+  const handleSaveMeal = async (selectedMealResult = analysisResult) => {
+    if (!selectedMealResult) return
 
     try {
       setIsSaving(true)
       setError(null)
 
       if (!user) {
-        storePendingMeal(analysisResult, capturedImage)
+        storePendingMeal(selectedMealResult, capturedImage)
         await signInWithGoogle()
         return
       }
 
-      await persistMeal(analysisResult)
+      await persistMeal(selectedMealResult)
     } catch (err) {
       setError('Failed to save meal. Please try again.')
       console.error('Save error:', err)
@@ -115,7 +159,8 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
     setCapturedImage(null)
     setAnalysisResult(null)
     setError(null)
-    setIsActive(false)
+    setCameraError(null)
+    stopDesktopCamera()
     onClose()
   }
 
@@ -124,7 +169,12 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
     setAnalysisResult(null)
     setError(null)
     setStage('camera')
-    setIsActive(true)
+    if (pendingImage) {
+      onClose()
+      return
+    }
+
+    startDesktopCamera()
   }
 
   if (!isOpen) return null
@@ -141,14 +191,12 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
 
         <div className="flex-1 overflow-y-auto flex flex-col">
           {stage === 'camera' && !pendingImage && (
-            <CameraView
+            <DesktopCameraView
               videoRef={videoRef}
               canvasRef={canvasRef}
-              isActive={isActive}
-              setIsActive={setIsActive}
-              hasPermission={hasPermission}
-              requestPermission={requestPermission}
+              error={cameraError}
               onCapture={handleCapture}
+              onClose={handleClose}
             />
           )}
 
@@ -205,37 +253,21 @@ export async function restorePendingMeal(user, onMealSaved) {
   }
 }
 
-function CameraView({ videoRef, canvasRef, isActive, setIsActive, hasPermission, requestPermission, onCapture }) {
-  useEffect(() => {
-    if (hasPermission === false) {
-      setIsActive(false)
-    } else if (hasPermission === true && !isActive) {
-      setIsActive(true)
-    }
-  }, [hasPermission, isActive, setIsActive])
-
-  if (hasPermission === false) {
+function DesktopCameraView({ videoRef, canvasRef, error, onCapture, onClose }) {
+  if (error) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-6 text-center min-h-[60vh]">
-        <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
-          <span className="text-2xl">📷</span>
+        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
+          <CameraGlyph />
         </div>
-        <h3 className="text-lg font-bold text-gray-900 mb-2">Camera Access Needed</h3>
-        <p className="text-gray-600 mb-6">Allow camera access to scan food, or use Upload Image on the home screen.</p>
+        <h3 className="text-lg font-bold text-gray-900 mb-2">Camera unavailable</h3>
+        <p className="text-gray-600 mb-6">{error}</p>
         <button
-          onClick={requestPermission}
+          onClick={onClose}
           className="bg-green-500 text-white px-6 py-2 rounded-lg font-semibold hover:bg-green-600"
         >
-          Enable Camera
+          Back to Scan
         </button>
-      </div>
-    )
-  }
-
-  if (hasPermission === null) {
-    return (
-      <div className="flex-1 flex items-center justify-center min-h-[60vh]">
-        <div className="w-10 h-10 border-3 border-green-500 border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
@@ -248,8 +280,8 @@ function CameraView({ videoRef, canvasRef, isActive, setIsActive, hasPermission,
         ref={videoRef}
         autoPlay
         playsInline
+        muted
         className="w-full h-full object-cover"
-        style={{ transform: 'scaleX(-1)' }}
       />
 
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -265,5 +297,23 @@ function CameraView({ videoRef, canvasRef, isActive, setIsActive, hasPermission,
         </button>
       </div>
     </div>
+  )
+}
+
+function CameraGlyph() {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M4 8.5A2.5 2.5 0 0 1 6.5 6H8l1.4-1.8A2 2 0 0 1 11 3.5h2a2 2 0 0 1 1.6.7L16 6h1.5A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-8Z"
+        stroke="#16a34a"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 15.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+        stroke="#16a34a"
+        strokeWidth="1.8"
+      />
+    </svg>
   )
 }

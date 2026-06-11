@@ -88,7 +88,12 @@ CREATE TABLE meal_logs (
   fat INTEGER NOT NULL,
   meal_score INTEGER NOT NULL,
   protein_level TEXT,
-  recommended_for TEXT
+  recommended_for TEXT,
+  portion_size TEXT,
+  estimated_grams NUMERIC,
+  portion_confidence NUMERIC,
+  confidence NUMERIC,
+  candidates JSONB
 );
 
 -- Scan counters table (for free tier limit)

@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Camera, Upload } from 'lucide-react'
 import CameraModal, { restorePendingMeal } from '../components/CameraModal'
 import { getMealLogsToday, calculateDailyTotals, getUserProfile } from '../services/database'
 import { signInWithGoogle } from '../services/supabase'
 
 export default function ScanScreen({ user }) {
+  const cameraInputRef = useRef(null)
   const [meals, setMeals] = useState([])
   const [totals, setTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [goals, setGoals] = useState({ calories: 2500, protein: 150 })
@@ -63,10 +64,15 @@ export default function ScanScreen({ user }) {
 
   const handleOpenCamera = () => {
     setPendingImage(null)
+    if (shouldUseNativeCapture()) {
+      cameraInputRef.current?.click()
+      return
+    }
+
     setCameraOpen(true)
   }
 
-  const handleUpload = (e) => {
+  const handleImageSelected = (e) => {
     const file = e.target.files?.[0]
     if (!file) return
 
@@ -117,6 +123,14 @@ export default function ScanScreen({ user }) {
             <Camera size={24} />
             <span>Open Camera</span>
           </button>
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleImageSelected}
+          />
 
           <label className="w-full bg-gray-50 hover:bg-gray-100 border-2 border-gray-200 text-gray-900 font-semibold py-4 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-3 cursor-pointer active:scale-95">
             <Upload size={24} />
@@ -125,7 +139,7 @@ export default function ScanScreen({ user }) {
               type="file"
               accept="image/*"
               className="hidden"
-              onChange={handleUpload}
+              onChange={handleImageSelected}
             />
           </label>
         </div>
@@ -260,4 +274,10 @@ export default function ScanScreen({ user }) {
       </div>
     </div>
   )
+}
+
+const shouldUseNativeCapture = () => {
+  if (typeof navigator === 'undefined') return false
+
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 }
