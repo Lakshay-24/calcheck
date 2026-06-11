@@ -86,7 +86,7 @@ export default function OnboardingScreen({ onComplete }) {
             Powered by
           </p>
           <div className="flex items-center justify-center gap-2 text-sm text-gray-600">
-            <span className="font-semibold">Google AI</span>
+            <span className="font-semibold">OpenAI</span>
             <span className="text-gray-400">•</span>
             <span className="font-semibold">Instant Results</span>
           </div>

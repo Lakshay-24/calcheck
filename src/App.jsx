@@ -1,29 +1,39 @@
-// Main App component with routing
+// App shell - routes and main layout
 import React, { useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
-import { supabase } from './src_services_supabase'
-import './src_index.css'
+import { supabase } from './services/supabase.js'
+import { getOrCreateUserProfile } from './services/database'
+import './index.css'
 
-// Screens
-import ScanScreen from './ScanScreen'
-import ProgressScreen from './ProgressScreen'
-import ProfileScreen from './ProfileScreen'
-import OnboardingScreen from './OnboardingScreen'
+import ScanScreen from './screens/ScanScreen'
+import OnboardingScreen from './screens/OnboardingScreen'
+import ProgressScreen from './screens/ProgressScreen'
+import ProfileScreen from './screens/ProfileScreen'
+import BottomNav from './components/BottomNav'
 
-// Components
-import BottomNav from './BottomNav'
+async function ensureUserProfile(user) {
+  if (!user?.id) return
+  try {
+    await getOrCreateUserProfile(user.id, user.email)
+  } catch (error) {
+    console.error('Profile setup error:', error)
+  }
+}
 
 function App() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [hasSeenOnboarding, setHasSeenOnboarding] = useState(localStorage.getItem('calcheck-onboarded') === 'true')
+  const [hasSeenOnboarding, setHasSeenOnboarding] = useState(
+    localStorage.getItem('calcheck-onboarded') === 'true'
+  )
 
   useEffect(() => {
-    // Check for existing session
     const checkAuth = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession()
-        setUser(session?.user || null)
+        const sessionUser = session?.user || null
+        setUser(sessionUser)
+        await ensureUserProfile(sessionUser)
       } catch (error) {
         console.error('Auth check error:', error)
       } finally {
@@ -33,9 +43,12 @@ function App() {
 
     checkAuth()
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      setUser(session?.user || null)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const sessionUser = session?.user || null
+      setUser(sessionUser)
+      if (sessionUser) {
+        await ensureUserProfile(sessionUser)
+      }
     })
 
     return () => subscription?.unsubscribe()
@@ -45,7 +58,7 @@ function App() {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-white">
         <div className="text-center">
-          <div className="w-12 h-12 border-3 border-green-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="w-12 h-12 border-3 border-green-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
           <p className="text-gray-500">Loading...</p>
         </div>
       </div>

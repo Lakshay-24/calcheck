@@ -1,7 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './src_App'
-import './src_index.css'
+import App from './App'
+import './index.css'
 
 // Register PWA service worker
 if ('serviceWorker' in navigator) {

@@ -11,7 +11,7 @@ CalCheck is a premium mobile-first Progressive Web App designed for Indian gym-g
 ## Features
 
 - 📸 **Food Scanning:** Take photos of meals and get instant calorie analysis
-- 🤖 **AI-Powered:** Google Gemini Vision API analyzes food and nutrition
+- 🤖 **AI-Powered:** OpenAI Vision analyzes food and nutrition through a secure Supabase Edge Function
 - 📊 **Daily Tracking:** Monitor calories, protein, carbs, and fat intake
 - 📈 **Progress Charts:** 7-day history with daily breakdowns
 - ⚡ **Instant Performance:** <2 seconds to interactive, <3 seconds for analysis
@@ -23,7 +23,7 @@ CalCheck is a premium mobile-first Progressive Web App designed for Indian gym-g
 
 - **Frontend:** React 18 + Vite
 - **Backend:** Supabase (PostgreSQL + Auth)
-- **AI:** Google Gemini Vision API
+- **AI:** OpenAI Vision via Supabase Edge Function
 - **Payments:** Razorpay
 - **Styling:** Tailwind CSS
 - **Storage:** Supabase + IndexedDB
@@ -34,7 +34,7 @@ CalCheck is a premium mobile-first Progressive Web App designed for Indian gym-g
 - Node.js 16+
 - npm or yarn
 - Supabase account
-- Google Gemini API key
+- OpenAI API key configured as a Supabase Edge Function secret
 - Razorpay account (for premium)
 
 ### Installation
@@ -54,11 +54,11 @@ npm install
 ```
 VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-VITE_GEMINI_API_KEY=your_gemini_api_key
+VITE_USE_MOCK_AI=false
 VITE_RAZORPAY_KEY_ID=your_razorpay_key_id
 ```
 
-4. Setup Supabase database (see SETUP.md)
+4. Setup Supabase database and Edge Function (see SETUP.md)
 
 5. Start development server
 ```bash
@@ -87,7 +87,7 @@ Tap "Open Camera"
     ↓
 Take Photo
     ↓
-Analyze (Gemini)
+Analyze (OpenAI Vision)
     ↓
 Results Screen (show nutrition)
     ↓
@@ -135,7 +135,7 @@ Progress Updates
 
 - ⚡ First paint: <1s
 - ⚡ Time to interactive: <2s
-- ⚡ Gemini analysis: <3s
+- ⚡ AI analysis: <5-10s
 - ⚡ Image compression: Automatic before API
 
 ## Monetization
@@ -163,7 +163,7 @@ npm run build
 
 ## API Integration
 
-### Gemini Vision Response Format
+### Food Analysis Response Format
 
 ```json
 {
@@ -174,7 +174,14 @@ npm run build
   "fat": 28,
   "meal_score": 68,
   "protein_level": "Medium",
-  "recommended_for": "Muscle Gain"
+  "recommended_for": "Muscle Gain",
+  "portion_size": "Medium",
+  "estimated_grams": 350,
+  "portion_confidence": 0.7,
+  "confidence": 0.82,
+  "candidates": [
+    { "name": "Chicken Biryani", "confidence": 0.82 }
+  ]
 }
 ```
 
@@ -182,7 +189,7 @@ npm run build
 
 - [x] Phase 1: Core setup (Vite, Tailwind, Supabase)
 - [ ] Phase 2: Camera & Onboarding
-- [ ] Phase 3: Gemini AI Integration
+- [ ] Phase 3: OpenAI Vision Integration
 - [ ] Phase 4: UI Screens
 - [ ] Phase 5: Authentication & Database
 - [ ] Phase 6: Premium & Payments

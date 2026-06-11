@@ -16,7 +16,7 @@ dirs.forEach(dir => {
 const files = [
   // Services
   { src: 'src_services_supabase.js', dest: 'src/services/supabase.js' },
-  { src: 'src_services_gemini.js', dest: 'src/services/gemini.js' },
+  { src: 'src_services_ai.js', dest: 'src/services/ai.js' },
   { src: 'src_services_database.js', dest: 'src/services/database.js' },
   // Hooks
   { src: 'src_hooks_useCamera.js', dest: 'src/hooks/useCamera.js' },
@@ -27,6 +27,8 @@ const files = [
   // Screens
   { src: 'src_screens_OnboardingScreen.jsx', dest: 'src/screens/OnboardingScreen.jsx' },
   { src: 'src_screens_ScanScreen.jsx', dest: 'src/screens/ScanScreen.jsx' },
+  { src: 'ProgressScreen.jsx', dest: 'src/screens/ProgressScreen.jsx' },
+  { src: 'ProfileScreen.jsx', dest: 'src/screens/ProfileScreen.jsx' },
   // Components
   { src: 'src_components_CameraModal.jsx', dest: 'src/components/CameraModal.jsx' },
   { src: 'src_components_AnalysisScreen.jsx', dest: 'src/components/AnalysisScreen.jsx' },
@@ -45,13 +47,13 @@ files.forEach(({ src, dest }) => {
     // Update imports in the file based on destination
     if (dest.includes('services/')) {
       content = content.replace(/from ['"]\.\/src_services_supabase['"]/g, "from './supabase'");
-      content = content.replace(/from ['"]\.\/src_services_gemini['"]/g, "from './gemini'");
+      content = content.replace(/from ['"]\.\/src_services_ai['"]/g, "from './ai'");
       content = content.replace(/from ['"]\.\/src_services_database['"]/g, "from './database'");
     } else if (dest.includes('hooks/')) {
       content = content.replace(/from ['"]\.\/src_hooks_useCamera['"]/g, "from './useCamera'");
     } else if (dest.includes('screens/')) {
       content = content.replace(/from ['"]\.\.\/src_services_supabase['"]/g, "from '../services/supabase'");
-      content = content.replace(/from ['"]\.\.\/src_services_gemini['"]/g, "from '../services/gemini'");
+      content = content.replace(/from ['"]\.\.\/src_services_ai['"]/g, "from '../services/ai'");
       content = content.replace(/from ['"]\.\.\/src_services_database['"]/g, "from '../services/database'");
       content = content.replace(/from ['"]\.\.\/src_hooks_useCamera['"]/g, "from '../hooks/useCamera'");
       content = content.replace(/from ['"]\.\.\/src_components_/g, "from '../components/");
@@ -64,12 +66,12 @@ files.forEach(({ src, dest }) => {
       content = content.replace(/from ['"]\.\/src_components_/g, "from './");
       // Fix specific patterns
       content = content.replace(/import { useCamera } from ['"]\.\.\/src_hooks_useCamera['"]/g, "import { useCamera } from '../hooks/useCamera'");
-      content = content.replace(/import { analyzeFood } from ['"]\.\.\/src_services_gemini['"]/g, "import { analyzeFood } from '../services/gemini'");
+      content = content.replace(/import { analyzeFood } from ['"]\.\.\/src_services_ai['"]/g, "import { analyzeFood } from '../services/ai'");
       content = content.replace(/import {[^}]*} from ['"]\.\.\/src_services_database['"]/g, (match) => match.replace(/\.\.\/src_services_database/, '../services/database'));
       content = content.replace(/import { signInWithGoogle } from ['"]\.\.\/src_services_supabase['"]/g, "import { signInWithGoogle } from '../services/supabase'");
     } else if (dest === 'src/main.jsx') {
       content = content.replace(/from ['"]\.\/src_App['"]/g, "from './App'");
-      content = content.replace(/from ['"]\.\/src_index\.css['"]/g, "from './index.css'");
+      content = content.replace(/import ['"]\.\/src_index\.css['"]/g, "import './index.css'");
     }
     
     fs.mkdirSync(path.dirname(destPath), { recursive: true });

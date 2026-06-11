@@ -1,16 +1,29 @@
 import React, { useState } from 'react'
 import { ArrowLeft, Heart } from 'lucide-react'
 
-export default function ResultsScreen({ result, image, onSave, onRetake, user }) {
-  const [isSaving, setIsSaving] = useState(false)
+export default function ResultsScreen({ result, image, onSave, onRetake, user, isSaving = false }) {
+  const [saving, setSaving] = useState(false)
 
   const handleSave = async () => {
-    setIsSaving(true)
+    setSaving(true)
     try {
       await onSave()
     } finally {
-      setIsSaving(false)
+      setSaving(false)
     }
+  }
+
+  const savingState = isSaving || saving
+  const confidence = result?.confidence ?? null
+  const isLowConfidence = confidence !== null && confidence < 0.6
+  const candidates = (result?.candidates || []).filter(
+    (c) => c.name && c.name !== result?.food_name
+  )
+
+  const getConfidenceLabel = (value) => {
+    if (value >= 0.8) return { text: 'High confidence', className: 'bg-green-100 text-green-800' }
+    if (value >= 0.6) return { text: 'Moderate confidence', className: 'bg-yellow-100 text-yellow-800' }
+    return { text: 'Low confidence', className: 'bg-orange-100 text-orange-800' }
   }
 
   const getProteinColor = (level) => {
@@ -61,11 +74,71 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user })
           <h2 className="text-4xl font-bold text-gray-900 leading-tight">
             {result?.food_name || 'Meal'}
           </h2>
-          <p className="text-sm text-gray-500 mt-2">
-            Typical serving
-          </p>
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            <p className="text-sm text-gray-500">Typical serving</p>
+            {confidence !== null && (
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${getConfidenceLabel(confidence).className}`}>
+                {getConfidenceLabel(confidence).text} ({Math.round(confidence * 100)}%)
+              </span>
+            )}
+          </div>
+          {isLowConfidence && (
+            <p className="text-sm text-orange-700 bg-orange-50 border border-orange-200 rounded-lg p-3 mt-3">
+              This guess may be wrong. Try a clearer photo or check other possibilities below.
+            </p>
+          )}
+          {candidates.length > 0 && (
+            <div className="mt-3">
+              <p className="text-xs font-semibold text-gray-600 uppercase tracking-widest mb-2">
+                Other possibilities
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {candidates.map((candidate) => (
+                  <span
+                    key={candidate.name}
+                    className="text-xs bg-gray-100 text-gray-700 px-3 py-1 rounded-full"
+                  >
+                    {candidate.name} ({Math.round(candidate.confidence * 100)}%)
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
+        {/* Portion Estimate */}
+{result?.portion_size && (
+  <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-2xl p-4">
+    <div className="flex items-center justify-between">
+      <div>
+        <p className="text-xs font-semibold text-indigo-700 uppercase tracking-widest">
+          Estimated Portion
+        </p>
 
+        <p className="text-2xl font-bold text-indigo-900 mt-1">
+          {result.portion_size}
+        </p>
+
+        {result.estimated_grams > 0 && (
+          <p className="text-sm text-indigo-600 mt-1">
+            ~{Math.round(result.estimated_grams)}g
+          </p>
+        )}
+      </div>
+
+      <div className="text-right">
+        <p className="text-xs text-indigo-600">
+          Quantity Confidence
+        </p>
+
+        <p className="text-lg font-semibold text-indigo-900">
+          {Math.round(
+            (result.portion_confidence ?? 0.5) * 100
+          )}%
+        </p>
+      </div>
+    </div>
+  </div>
+)}
         {/* Main Nutrition Display */}
         <div className="grid grid-cols-2 gap-4">
           {/* Calories */}
@@ -156,10 +229,10 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user })
           {user ? (
             <button
               onClick={handleSave}
-              disabled={isSaving}
+              disabled={savingState}
               className="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold py-4 px-6 rounded-2xl transition-all active:scale-95 disabled:opacity-70"
             >
-              {isSaving ? 'Saving...' : 'Save Meal'}
+              {savingState ? 'Saving...' : 'Save Meal'}
             </button>
           ) : (
             <button

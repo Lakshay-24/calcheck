@@ -1,28 +1,53 @@
 import React, { useState, useEffect } from 'react'
 import { Camera, Upload } from 'lucide-react'
-import CameraModal from '../components/CameraModal'
-import { getMealLogsToday, calculateDailyTotals } from '../services/database'
+import CameraModal, { restorePendingMeal } from '../components/CameraModal'
+import { getMealLogsToday, calculateDailyTotals, getUserProfile } from '../services/database'
+import { signInWithGoogle } from '../services/supabase'
 
 export default function ScanScreen({ user }) {
   const [meals, setMeals] = useState([])
   const [totals, setTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
-  const [goals] = useState({ calories: 2500, protein: 150 })
+  const [goals, setGoals] = useState({ calories: 2500, protein: 150 })
   const [cameraOpen, setCameraOpen] = useState(false)
+  const [pendingImage, setPendingImage] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [saveNotice, setSaveNotice] = useState(null)
 
-  // Fetch today's meals if user is logged in
   useEffect(() => {
     if (user?.id) {
       loadTodaysMeals()
+      restorePendingMealAfterLogin()
+    } else {
+      setMeals([])
+      setTotals({ calories: 0, protein: 0, carbs: 0, fat: 0 })
     }
   }, [user])
 
+  const restorePendingMealAfterLogin = async () => {
+    const saved = await restorePendingMeal(user, loadTodaysMeals)
+    if (saved) {
+      setSaveNotice('Your meal was saved after signing in.')
+      setTimeout(() => setSaveNotice(null), 4000)
+    }
+  }
+
   const loadTodaysMeals = async () => {
+    if (!user?.id) return
+
     try {
       setLoading(true)
-      const mealLogs = await getMealLogsToday(user.id)
+      const [mealLogs, profile] = await Promise.all([
+        getMealLogsToday(user.id),
+        getUserProfile(user.id).catch(() => null)
+      ])
       setMeals(mealLogs)
       setTotals(calculateDailyTotals(mealLogs))
+      if (profile) {
+        setGoals({
+          calories: profile.calorie_target || 2500,
+          protein: profile.protein_target || 150
+        })
+      }
     } catch (error) {
       console.error('Error loading meals:', error)
     } finally {
@@ -31,45 +56,68 @@ export default function ScanScreen({ user }) {
   }
 
   const handleMealSaved = () => {
-    // Reload meals after saving
     if (user?.id) {
       loadTodaysMeals()
     }
   }
 
-  const caloriePercent = Math.round((totals.calories / goals.calories) * 100)
-  const proteinPercent = Math.round((totals.protein / goals.protein) * 100)
+  const handleOpenCamera = () => {
+    setPendingImage(null)
+    setCameraOpen(true)
+  }
+
+  const handleUpload = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      setPendingImage(event.target.result)
+      setCameraOpen(true)
+    }
+    reader.readAsDataURL(file)
+    e.target.value = ''
+  }
+
+  const handleCloseModal = () => {
+    setCameraOpen(false)
+    setPendingImage(null)
+  }
+
+  const caloriePercent = goals.calories ? Math.round((totals.calories / goals.calories) * 100) : 0
+  const proteinPercent = goals.protein ? Math.round((totals.protein / goals.protein) * 100) : 0
 
   return (
     <div className="h-full w-full bg-white overflow-y-auto pb-24">
-      {/* Camera Modal */}
       <CameraModal
         isOpen={cameraOpen}
-        onClose={() => setCameraOpen(false)}
+        onClose={handleCloseModal}
         user={user}
         onMealSaved={handleMealSaved}
+        pendingImage={pendingImage}
       />
 
-      {/* Header */}
       <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 z-10">
         <h1 className="text-2xl font-bold text-gray-900">Scan Food</h1>
         <p className="text-sm text-gray-500 mt-1">Track your nutrition instantly</p>
       </div>
 
-      {/* Main Content */}
       <div className="px-6 py-6 space-y-6">
-        {/* CTA Buttons Section */}
+        {saveNotice && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-sm text-green-800">
+            {saveNotice}
+          </div>
+        )}
+
         <div className="space-y-3">
-          {/* Primary CTA: Open Camera */}
           <button
-            onClick={() => setCameraOpen(true)}
+            onClick={handleOpenCamera}
             className="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold py-4 px-6 rounded-2xl shadow-md hover:shadow-lg transition-all duration-300 flex items-center justify-center gap-3 active:scale-95"
           >
             <Camera size={24} />
             <span>Open Camera</span>
           </button>
 
-          {/* Secondary CTA: Upload Image */}
           <label className="w-full bg-gray-50 hover:bg-gray-100 border-2 border-gray-200 text-gray-900 font-semibold py-4 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-3 cursor-pointer active:scale-95">
             <Upload size={24} />
             <span>Upload Image</span>
@@ -77,23 +125,11 @@ export default function ScanScreen({ user }) {
               type="file"
               accept="image/*"
               className="hidden"
-              onChange={(e) => {
-                // Handle file upload
-                const file = e.target.files?.[0]
-                if (file) {
-                  const reader = new FileReader()
-                  reader.onload = (event) => {
-                    // Could trigger camera modal with image
-                    setCameraOpen(true)
-                  }
-                  reader.readAsDataURL(file)
-                }
-              }}
+              onChange={handleUpload}
             />
           </label>
         </div>
 
-        {/* Today's Progress Card */}
         <div className="bg-gradient-to-br from-green-50 to-transparent border border-green-100 rounded-3xl p-6 space-y-6">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold text-gray-900">Today's Progress</h2>
@@ -102,7 +138,34 @@ export default function ScanScreen({ user }) {
             </span>
           </div>
 
-          {/* Calories */}
+          {!user && (
+  <div className="bg-white rounded-2xl p-4 border border-green-100">
+    <p className="font-semibold text-gray-900 mb-1">
+      Save meals and track progress
+    </p>
+
+    <p className="text-sm text-gray-500 mb-4">
+      Sign in to sync your calories, protein, and meal history.
+    </p>
+
+   
+    <button
+  onClick={signInWithGoogle}
+  className="w-full bg-white border border-gray-300 hover:bg-gray-50 rounded-xl py-3 font-medium flex items-center justify-center gap-2"
+>
+  <svg width="18" height="18" viewBox="0 0 48 48">
+    <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12S17.4 12 24 12c3 0 5.7 1.1 7.8 3l5.7-5.7C34.1 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z"/>
+  </svg>
+
+  Continue with Google
+</button>
+
+
+    <p className="text-xs text-gray-400 text-center mt-3">
+      Save meals • Track progress • Sync across devices
+    </p>
+  </div>
+)}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold text-gray-600">Calories</span>
@@ -114,16 +177,17 @@ export default function ScanScreen({ user }) {
               <div
                 className="bg-gradient-to-r from-green-400 to-green-600 h-full transition-all duration-500 rounded-full"
                 style={{ width: `${Math.min(caloriePercent, 100)}%` }}
-              ></div>
+              />
             </div>
             <p className="text-xs text-gray-500">
-              {goals.calories - totals.calories > 0
-                ? `${goals.calories - totals.calories} kcal remaining`
-                : `${Math.abs(goals.calories - totals.calories)} kcal over`}
+              {user
+                ? goals.calories - totals.calories > 0
+                  ? `${goals.calories - totals.calories} kcal remaining`
+                  : `${Math.abs(goals.calories - totals.calories)} kcal over`
+                : 'Log in to track daily totals'}
             </p>
           </div>
 
-          {/* Protein */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold text-gray-600">Protein</span>
@@ -135,16 +199,17 @@ export default function ScanScreen({ user }) {
               <div
                 className="bg-gradient-to-r from-blue-400 to-blue-600 h-full transition-all duration-500 rounded-full"
                 style={{ width: `${Math.min(proteinPercent, 100)}%` }}
-              ></div>
+              />
             </div>
             <p className="text-xs text-gray-500">
-              {goals.protein - totals.protein > 0
-                ? `${goals.protein - totals.protein}g more`
-                : `Goal met!`}
+              {user
+                ? goals.protein - totals.protein > 0
+                  ? `${goals.protein - totals.protein}g more`
+                  : 'Goal met!'
+                : 'Log in to track daily totals'}
             </p>
           </div>
 
-          {/* Quick Stats */}
           <div className="grid grid-cols-2 gap-3 pt-2 border-t border-green-200">
             <div className="space-y-1">
               <p className="text-xs text-gray-600">Carbs</p>
@@ -157,8 +222,9 @@ export default function ScanScreen({ user }) {
           </div>
         </div>
 
-        {/* Empty State or Meals List */}
-        {meals.length === 0 ? (
+        {loading ? (
+          <div className="text-center py-8 text-gray-500 text-sm">Loading meals...</div>
+        ) : meals.length === 0 ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
               <span className="text-3xl">📷</span>
@@ -177,7 +243,10 @@ export default function ScanScreen({ user }) {
                 <div className="flex-1">
                   <p className="font-semibold text-gray-900">{meal.food_name}</p>
                   <p className="text-xs text-gray-500 mt-1">
-                    {meal.calories} kcal • {meal.protein}g protein
+                    {meal.calories} kcal • {meal.protein}g protein • {meal.carbs}g carbs • {meal.fat}g fat
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {new Date(meal.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                   </p>
                 </div>
                 <div className="text-right">

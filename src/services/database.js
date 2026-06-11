@@ -90,11 +90,11 @@ export const getOrCreateUserProfile = async (userId, email) => {
     .from('users')
     .select('*')
     .eq('id', userId)
-    .single()
+    .maybeSingle()
 
   if (existing) return existing
 
-  const { data: created } = await supabase
+  const { data: created, error } = await supabase
     .from('users')
     .insert({
       id: userId,
@@ -108,6 +108,7 @@ export const getOrCreateUserProfile = async (userId, email) => {
     .select()
     .single()
 
+  if (error) throw error
   return created
 }
 

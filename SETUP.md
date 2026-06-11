@@ -18,7 +18,7 @@ calcheck/
 │   │
 │   ├── services/
 │   │   ├── supabase.js       # Supabase client & auth
-│   │   ├── gemini.js         # Gemini Vision API integration
+│   │   ├── ai.js             # Food analysis client wrapper
 │   │   └── database.js       # Supabase database operations
 │   │
 │   ├── hooks/
@@ -144,20 +144,29 @@ CREATE POLICY "Users can update own scan counters"
 - Enable Google
 - Add your Google OAuth credentials
 
-### 5. Get Gemini API Key
-- Go to https://ai.google.dev/
-- Create API key
-- Keep it secure
+### 5. Configure OpenAI Edge Function Secret
+- Create an OpenAI API key
+- Store it as a Supabase Edge Function secret, not a Vite variable
+
+```bash
+supabase secrets set OPENAI_API_KEY=your_openai_api_key
+supabase secrets set OPENAI_VISION_MODEL=gpt-5.5
+```
 
 ### 6. Create .env.local
 ```
 VITE_SUPABASE_URL=your_url
 VITE_SUPABASE_ANON_KEY=your_key
-VITE_GEMINI_API_KEY=your_key
+VITE_USE_MOCK_AI=false
 VITE_RAZORPAY_KEY_ID=your_key (add later)
 ```
 
-### 7. Start Development
+### 7. Deploy the Analyze Food Function
+```bash
+supabase functions deploy analyze-food
+```
+
+### 8. Start Development
 ```bash
 npm run dev
 ```
@@ -176,9 +185,9 @@ npm run dev
 - [ ] Photo capture
 
 ### Phase 3: AI Integration
-- [ ] Gemini Vision API
+- [ ] OpenAI Vision Edge Function
 - [ ] Image compression
-- [ ] Response parsing
+- [ ] Structured output validation
 
 ### Phase 4: UI Screens
 - [ ] ScanScreen (main hub)
@@ -212,7 +221,7 @@ npm run dev
 
 This initial commit includes:
 - Base configuration (Vite, Tailwind, PWA)
-- Service layer (Supabase, Gemini, Database)
+- Service layer (Supabase, AI, Database)
 - App shell and routing
 - Global styles
 

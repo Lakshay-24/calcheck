@@ -33,19 +33,7 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,jpg}'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/api\.gemini\.google\.com\/.*/i,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'gemini-api-cache',
-              expiration: {
-                maxAgeSeconds: 60 * 60
-              }
-            }
-          }
-        ]
+        globPatterns: ['**/*.{js,css,html,svg,png,jpg}']
       }
     })
   ]
