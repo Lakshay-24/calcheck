@@ -21,6 +21,13 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
   const selectedResult = selectedOption?.result || result
 
   const handleSave = async () => {
+    console.info('[CalCheck] ResultsScreen save selected', {
+      food_name: selectedResult?.food_name,
+      timezone: selectedResult?.timezone,
+      local_date: selectedResult?.local_date,
+      meal_type: selectedResult?.meal_type
+    })
+
     setSaving(true)
     try {
       await onSave(selectedResult)

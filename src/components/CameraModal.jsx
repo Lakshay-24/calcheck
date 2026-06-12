@@ -35,9 +35,11 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const streamRef = useRef(null)
+  const analysisRequestRef = useRef(0)
 
   useEffect(() => {
     if (!isOpen) {
+      analysisRequestRef.current += 1
       stopDesktopCamera()
       return
     }
@@ -94,13 +96,25 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
   }
 
   const analyzePhoto = async (base64Image) => {
+    const requestId = analysisRequestRef.current + 1
+    analysisRequestRef.current = requestId
+
     try {
       setError(null)
       setStage('analysis')
-      const result = await analyzeFood(base64Image)
+      const result = await withTimeout(
+        analyzeFood(base64Image),
+        45000,
+        'Analysis is taking too long. Please try again.'
+      )
+
+      if (analysisRequestRef.current !== requestId) return
+
       setAnalysisResult(result)
       setStage('results')
     } catch (err) {
+      if (analysisRequestRef.current !== requestId) return
+
       setError(err.message || 'Failed to analyze food image. Please try again.')
       setStage('camera')
       setCapturedImage(null)
@@ -108,10 +122,24 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
   }
 
   const persistMeal = async (mealResult) => {
+    console.info('[CalCheck] CameraModal persistMeal', {
+      user_id: user?.id,
+      food_name: mealResult?.food_name,
+      timezone: mealResult?.timezone,
+      local_date: mealResult?.local_date,
+      meal_type: mealResult?.meal_type
+    })
+
     await getOrCreateUserProfile(user.id, user.email)
-    await saveMealLog(user.id, mealResult)
+    const savedMeal = await saveMealLog(user.id, mealResult)
+    console.info('[CalCheck] CameraModal persistMeal saved', {
+      id: savedMeal?.id,
+      timezone: savedMeal?.timezone,
+      local_date: savedMeal?.local_date,
+      meal_type: savedMeal?.meal_type
+    })
     clearPendingMeal()
-    onMealSaved?.()
+    onMealSaved?.(savedMeal)
     handleClose()
   }
 
@@ -135,6 +163,14 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
   const handleSaveMeal = async (selectedMealResult = analysisResult) => {
     if (!selectedMealResult) return
 
+    console.info('[CalCheck] CameraModal handleSaveMeal', {
+      hasUser: Boolean(user),
+      food_name: selectedMealResult?.food_name,
+      timezone: selectedMealResult?.timezone,
+      local_date: selectedMealResult?.local_date,
+      meal_type: selectedMealResult?.meal_type
+    })
+
     try {
       setIsSaving(true)
       setError(null)
@@ -155,6 +191,7 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
   }
 
   const handleClose = () => {
+    analysisRequestRef.current += 1
     setStage('camera')
     setCapturedImage(null)
     setAnalysisResult(null)
@@ -165,6 +202,7 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
   }
 
   const handleRetake = () => {
+    analysisRequestRef.current += 1
     setCapturedImage(null)
     setAnalysisResult(null)
     setError(null)
@@ -237,15 +275,40 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
   )
 }
 
+const withTimeout = (promise, ms, message) => {
+  let timeoutId
+
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), ms)
+  })
+
+  return Promise.race([promise, timeout]).finally(() => {
+    window.clearTimeout(timeoutId)
+  })
+}
+
 export async function restorePendingMeal(user, onMealSaved) {
   const pending = getPendingMeal()
   if (!pending?.result || !user) return false
 
   try {
+    console.info('[CalCheck] restorePendingMeal save path', {
+      user_id: user?.id,
+      food_name: pending.result?.food_name,
+      timezone: pending.result?.timezone,
+      local_date: pending.result?.local_date,
+      meal_type: pending.result?.meal_type
+    })
     await getOrCreateUserProfile(user.id, user.email)
-    await saveMealLog(user.id, pending.result)
+    const savedMeal = await saveMealLog(user.id, pending.result)
+    console.info('[CalCheck] restorePendingMeal saved', {
+      id: savedMeal?.id,
+      timezone: savedMeal?.timezone,
+      local_date: savedMeal?.local_date,
+      meal_type: savedMeal?.meal_type
+    })
     clearPendingMeal()
-    onMealSaved?.()
+    onMealSaved?.(savedMeal)
     return true
   } catch (error) {
     console.error('Failed to restore pending meal:', error)

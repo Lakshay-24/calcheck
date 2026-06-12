@@ -73,6 +73,8 @@ CREATE TABLE users (
   subscription_status TEXT DEFAULT 'free',
   subscription_end_date TIMESTAMP,
   scans_used_today INTEGER DEFAULT 0,
+  timezone TEXT,
+  timezone_updated_at TIMESTAMPTZ,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -93,7 +95,10 @@ CREATE TABLE meal_logs (
   estimated_grams NUMERIC,
   portion_confidence NUMERIC,
   confidence NUMERIC,
-  candidates JSONB
+  candidates JSONB,
+  timezone TEXT,
+  local_date DATE,
+  meal_type TEXT
 );
 
 -- Scan counters table (for free tier limit)
@@ -104,6 +109,9 @@ CREATE TABLE scan_counters (
   scan_count INTEGER DEFAULT 0,
   UNIQUE(user_id, date)
 );
+
+CREATE INDEX meal_logs_user_local_date_idx
+  ON meal_logs (user_id, local_date DESC);
 
 -- Enable row level security
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;

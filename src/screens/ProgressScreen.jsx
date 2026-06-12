@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   getMealLogsToday,
   getMealLogsWeek,
@@ -6,32 +6,41 @@ import {
   calculateWeeklyBreakdown,
   getUserProfile
 } from '../services/database'
+import { formatLocalTime, getUserTimezone } from '../utils/timezone'
 
-export default function ProgressScreen({ user }) {
+export default function ProgressScreen({ user, resumeSignal = 0 }) {
+  const loadRequestRef = useRef(0)
   const [todayTotals, setTodayTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [todayMeals, setTodayMeals] = useState([])
   const [weeklyBreakdown, setWeeklyBreakdown] = useState({})
   const [goals, setGoals] = useState({ calories: 2500, protein: 150 })
   const [loading, setLoading] = useState(true)
+  const [recoveryKey, setRecoveryKey] = useState(0)
+  const timezone = getUserTimezone()
 
-  useEffect(() => {
-    if (user?.id) {
-      loadProgress()
+  const loadProgress = useCallback(async (reason = 'screen-load') => {
+    if (!user?.id) {
+      setLoading(false)
+      return
     }
-  }, [user])
 
-  const loadProgress = async () => {
+    const requestId = loadRequestRef.current + 1
+    loadRequestRef.current = requestId
+
     try {
+      console.info('[CalCheck] data refresh started', { screen: 'progress', reason })
       setLoading(true)
       const [todayLogs, weekLogs, profile] = await Promise.all([
-        getMealLogsToday(user.id),
-        getMealLogsWeek(user.id),
+        getMealLogsToday(user.id, timezone),
+        getMealLogsWeek(user.id, timezone),
         getUserProfile(user.id).catch(() => null)
       ])
 
+      if (loadRequestRef.current !== requestId) return
+
       setTodayMeals(todayLogs)
       setTodayTotals(calculateDailyTotals(todayLogs))
-      setWeeklyBreakdown(calculateWeeklyBreakdown(weekLogs))
+      setWeeklyBreakdown(calculateWeeklyBreakdown(weekLogs, timezone))
 
       if (profile) {
         setGoals({
@@ -39,15 +48,54 @@ export default function ProgressScreen({ user }) {
           protein: profile.protein_target || 150
         })
       }
+      console.info('[CalCheck] data refresh completed', { screen: 'progress', reason })
     } catch (error) {
       console.error('Error loading progress:', error)
     } finally {
+      if (loadRequestRef.current === requestId) {
+        setLoading(false)
+      }
+    }
+  }, [timezone, user?.id])
+
+  useEffect(() => {
+    if (user?.id) {
+      loadProgress('user-change')
+    } else {
+      loadRequestRef.current += 1
       setLoading(false)
     }
-  }
+  }, [loadProgress, user?.id])
+
+  useEffect(() => {
+    if (!resumeSignal || !user?.id) return
+    loadProgress('app-resume')
+  }, [loadProgress, resumeSignal, user?.id])
+
+  useEffect(() => {
+    if (!loading) return undefined
+
+    const retryTimer = window.setTimeout(() => {
+      console.warn('[CalCheck] loading timeout triggered', { screen: 'progress', seconds: 5 })
+      loadProgress('loading-timeout-retry')
+    }, 5000)
+
+    const recoveryTimer = window.setTimeout(() => {
+      console.warn('[CalCheck] loading timeout triggered', { screen: 'progress', seconds: 10 })
+      loadRequestRef.current += 1
+      setLoading(false)
+      setRecoveryKey((value) => value + 1)
+      window.setTimeout(() => loadProgress('soft-recovery'), 0)
+    }, 10000)
+
+    return () => {
+      window.clearTimeout(retryTimer)
+      window.clearTimeout(recoveryTimer)
+    }
+  }, [loadProgress, loading])
 
   const weeklyEntries = Object.entries(weeklyBreakdown).sort(
-    (a, b) => new Date(a[0]) - new Date(b[0])
+    (a, b) => a[0].localeCompare(b[0])
   )
 
   const caloriePercent = goals.calories
@@ -66,7 +114,7 @@ export default function ProgressScreen({ user }) {
   }
 
   return (
-    <div className="h-full w-full bg-white overflow-y-auto pb-24">
+    <div key={recoveryKey} className="h-full w-full bg-white overflow-y-auto pb-24">
       <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 z-10">
         <h1 className="text-2xl font-bold text-gray-900">Progress</h1>
         <p className="text-sm text-gray-500 mt-1">Daily totals and history</p>
@@ -163,7 +211,7 @@ export default function ProgressScreen({ user }) {
                     {meal.calories} kcal • {meal.protein}g protein • {meal.carbs}g carbs • {meal.fat}g fat
                   </p>
                   <p className="text-xs text-gray-400 mt-1">
-                    {new Date(meal.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                    {formatLocalTime(meal.timestamp, meal.timezone || timezone)}
                   </p>
                 </div>
                 <div className="text-right">

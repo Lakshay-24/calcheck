@@ -1,45 +1,124 @@
 import { supabase } from './supabase'
+import {
+  getEndOfLocalDay,
+  getLocalDate,
+  getMealTypeForLocalTime,
+  getStartOfLocalDay,
+  getUserTimezone
+} from '../utils/timezone'
 
 // Meal CRUD operations
 export const saveMealLog = async (userId, mealData) => {
+  const now = new Date()
+  const timezone = getUserTimezone()
+  const localDate = getLocalDate(now, timezone)
+  const mealType = getMealTypeForLocalTime(now, timezone)
+  const insertPayload = {
+    ...mealData,
+    user_id: userId,
+    timestamp: now.toISOString(),
+    timezone,
+    local_date: localDate,
+    meal_type: mealType
+  }
+
+  console.info('[CalCheck] saveMealLog timezone detection', {
+    intl_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    helper_timezone: timezone,
+    local_date: localDate,
+    meal_type: mealType,
+    timestamp: insertPayload.timestamp
+  })
+
+  console.info('[CalCheck] saveMealLog final insert payload', {
+    ...insertPayload,
+    candidates: Array.isArray(insertPayload.candidates)
+      ? `[${insertPayload.candidates.length} candidates]`
+      : insertPayload.candidates
+  })
+
   const { data, error } = await supabase
     .from('meal_logs')
-    .insert({
-      user_id: userId,
-      timestamp: new Date().toISOString(),
-      ...mealData
-    })
+    .insert(insertPayload)
     .select()
 
   if (error) throw error
-  return data[0]
+
+  const insertedMeal = data?.[0] || null
+  console.info('[CalCheck] saveMealLog Supabase insert response', {
+    id: insertedMeal?.id,
+    timezone: insertedMeal?.timezone,
+    local_date: insertedMeal?.local_date,
+    meal_type: insertedMeal?.meal_type,
+    full_row: insertedMeal
+  })
+
+  if (
+    insertedMeal?.id &&
+    (!insertedMeal.timezone || !insertedMeal.local_date || !insertedMeal.meal_type)
+  ) {
+    console.warn('[CalCheck] saveMealLog timezone fields missing after insert; repairing row', {
+      id: insertedMeal.id,
+      timezone,
+      local_date: localDate,
+      meal_type: mealType
+    })
+
+    const { data: repairedMeal, error: repairError } = await supabase
+      .from('meal_logs')
+      .update({
+        timezone,
+        local_date: localDate,
+        meal_type: mealType
+      })
+      .eq('id', insertedMeal.id)
+      .select()
+      .single()
+
+    if (repairError) throw repairError
+
+    console.info('[CalCheck] saveMealLog repair response', {
+      id: repairedMeal?.id,
+      timezone: repairedMeal?.timezone,
+      local_date: repairedMeal?.local_date,
+      meal_type: repairedMeal?.meal_type,
+      full_row: repairedMeal
+    })
+
+    return repairedMeal
+  }
+
+  return insertedMeal
 }
 
-export const getMealLogsToday = async (userId) => {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+export const getMealLogsToday = async (userId, timezone = getUserTimezone()) => {
+  const startOfDay = getStartOfLocalDay(new Date(), timezone)
+  const endOfDay = getEndOfLocalDay(new Date(), timezone)
 
   const { data, error } = await supabase
     .from('meal_logs')
     .select('*')
     .eq('user_id', userId)
-    .gte('timestamp', today.toISOString())
+    .gte('timestamp', startOfDay.toISOString())
+    .lte('timestamp', endOfDay.toISOString())
     .order('timestamp', { ascending: false })
 
   if (error) throw error
   return data
 }
 
-export const getMealLogsWeek = async (userId) => {
-  const weekAgo = new Date()
-  weekAgo.setDate(weekAgo.getDate() - 7)
-  weekAgo.setHours(0, 0, 0, 0)
+export const getMealLogsWeek = async (userId, timezone = getUserTimezone()) => {
+  const today = new Date()
+  const weekStart = new Date(getStartOfLocalDay(today, timezone))
+  weekStart.setUTCDate(weekStart.getUTCDate() - 6)
+  const endOfToday = getEndOfLocalDay(today, timezone)
 
   const { data, error } = await supabase
     .from('meal_logs')
     .select('*')
     .eq('user_id', userId)
-    .gte('timestamp', weekAgo.toISOString())
+    .gte('timestamp', weekStart.toISOString())
+    .lte('timestamp', endOfToday.toISOString())
     .order('timestamp', { ascending: true })
 
   if (error) throw error
@@ -66,11 +145,11 @@ export const calculateDailyTotals = (mealLogs) => {
 }
 
 // Calculate weekly totals by day
-export const calculateWeeklyBreakdown = (mealLogs) => {
+export const calculateWeeklyBreakdown = (mealLogs, timezone = getUserTimezone()) => {
   const breakdown = {}
 
   mealLogs.forEach(meal => {
-    const date = new Date(meal.timestamp).toLocaleDateString('en-IN')
+    const date = meal.local_date || getLocalDate(new Date(meal.timestamp), meal.timezone || timezone)
     if (!breakdown[date]) {
       breakdown[date] = { calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 }
     }
@@ -86,13 +165,21 @@ export const calculateWeeklyBreakdown = (mealLogs) => {
 
 // Get or create user profile
 export const getOrCreateUserProfile = async (userId, email) => {
+  const timezone = getUserTimezone()
+
   const { data: existing } = await supabase
     .from('users')
     .select('*')
     .eq('id', userId)
     .maybeSingle()
 
-  if (existing) return existing
+  if (existing) {
+    if (existing.timezone !== timezone) {
+      return updateUserTimezone(userId, timezone)
+    }
+
+    return existing
+  }
 
   const { data: created, error } = await supabase
     .from('users')
@@ -103,7 +190,9 @@ export const getOrCreateUserProfile = async (userId, email) => {
       calorie_target: 2500,
       protein_target: 150,
       subscription_status: 'free',
-      scans_used_today: 0
+      scans_used_today: 0,
+      timezone,
+      timezone_updated_at: new Date().toISOString()
     })
     .select()
     .single()
@@ -117,6 +206,21 @@ export const updateUserProfile = async (userId, updates) => {
   const { data, error } = await supabase
     .from('users')
     .update(updates)
+    .eq('id', userId)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+export const updateUserTimezone = async (userId, timezone = getUserTimezone()) => {
+  const { data, error } = await supabase
+    .from('users')
+    .update({
+      timezone,
+      timezone_updated_at: new Date().toISOString()
+    })
     .eq('id', userId)
     .select()
     .single()
@@ -139,7 +243,7 @@ export const getUserProfile = async (userId) => {
 
 // Increment daily scan counter
 export const incrementScanCount = async (userId) => {
-  const today = new Date().toLocaleDateString('en-IN')
+  const today = getLocalDate(new Date(), getUserTimezone())
 
   const { data: existing } = await supabase
     .from('scan_counters')
@@ -168,7 +272,7 @@ export const incrementScanCount = async (userId) => {
 
 // Get scan count for today
 export const getScanCountToday = async (userId) => {
-  const today = new Date().toLocaleDateString('en-IN')
+  const today = getLocalDate(new Date(), getUserTimezone())
 
   const { data } = await supabase
     .from('scan_counters')

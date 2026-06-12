@@ -1,5 +1,5 @@
 // App shell - routes and main layout
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { supabase } from './services/supabase.js'
 import { getOrCreateUserProfile } from './services/database'
@@ -23,27 +23,52 @@ async function ensureUserProfile(user) {
 function App() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [resumeSignal, setResumeSignal] = useState(0)
+  const [appRecoveryKey, setAppRecoveryKey] = useState(0)
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(
     localStorage.getItem('calcheck-onboarded') === 'true'
   )
+  const authCheckRef = useRef(0)
+  const lastResumeAtRef = useRef(0)
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession()
-        const sessionUser = session?.user || null
-        setUser(sessionUser)
-        await ensureUserProfile(sessionUser)
-      } catch (error) {
-        console.error('Auth check error:', error)
-      } finally {
+  const revalidateAuth = useCallback(async (source = 'startup') => {
+    const checkId = authCheckRef.current + 1
+    authCheckRef.current = checkId
+
+    try {
+      console.info('[CalCheck] data refresh started', { source, target: 'auth' })
+      const { data: { session } } = await supabase.auth.getSession()
+      let activeSession = session
+
+      if (session) {
+        const { data, error } = await supabase.auth.refreshSession()
+        if (error) {
+          console.warn('[CalCheck] session refresh skipped or failed', error)
+        } else if (data?.session) {
+          activeSession = data.session
+        }
+      }
+
+      if (authCheckRef.current !== checkId) return
+
+      const sessionUser = activeSession?.user || null
+      setUser(sessionUser)
+      await ensureUserProfile(sessionUser)
+      console.info('[CalCheck] data refresh completed', { source, target: 'auth' })
+    } catch (error) {
+      console.error('[CalCheck] Auth check error:', error)
+    } finally {
+      if (authCheckRef.current === checkId) {
         setLoading(false)
       }
     }
+  }, [])
 
-    checkAuth()
+  useEffect(() => {
+    revalidateAuth('startup')
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.info('[CalCheck] auth state changed', { event })
       const sessionUser = session?.user || null
       setUser(sessionUser)
       if (sessionUser) {
@@ -52,7 +77,61 @@ function App() {
     })
 
     return () => subscription?.unsubscribe()
-  }, [])
+  }, [revalidateAuth])
+
+  useEffect(() => {
+    const handleResume = (source) => {
+      if (document.visibilityState === 'hidden') return
+      const now = Date.now()
+      if (now - lastResumeAtRef.current < 1000) return
+      lastResumeAtRef.current = now
+
+      console.info('[CalCheck] app resumed', { source })
+      setResumeSignal((value) => value + 1)
+      revalidateAuth(source)
+    }
+
+    const handleVisibilityChange = () => {
+      console.info('[CalCheck] visibility changed', { state: document.visibilityState })
+      if (document.visibilityState === 'visible') {
+        handleResume('visibilitychange')
+      }
+    }
+
+    const handleFocus = () => handleResume('focus')
+    const handlePageShow = (event) => handleResume(event.persisted ? 'pageshow-bfcache' : 'pageshow')
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', handleFocus)
+    window.addEventListener('pageshow', handlePageShow)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', handleFocus)
+      window.removeEventListener('pageshow', handlePageShow)
+    }
+  }, [revalidateAuth])
+
+  useEffect(() => {
+    if (!loading) return undefined
+
+    const retryTimer = window.setTimeout(() => {
+      console.warn('[CalCheck] loading timeout triggered', { target: 'app-auth', seconds: 5 })
+      revalidateAuth('app-auth-timeout-retry')
+    }, 5000)
+
+    const recoveryTimer = window.setTimeout(() => {
+      console.warn('[CalCheck] loading timeout triggered', { target: 'app-auth', seconds: 10 })
+      setLoading(false)
+      setAppRecoveryKey((value) => value + 1)
+      revalidateAuth('app-auth-soft-recovery')
+    }, 10000)
+
+    return () => {
+      window.clearTimeout(retryTimer)
+      window.clearTimeout(recoveryTimer)
+    }
+  }, [loading, revalidateAuth])
 
   if (loading) {
     return (
@@ -74,8 +153,18 @@ function App() {
       <div className="h-screen w-screen flex flex-col bg-white overflow-hidden">
         <div className="flex-1 overflow-y-auto">
           <Routes>
-            <Route path="/" element={<ScanScreen user={user} />} />
-            <Route path="/progress" element={user ? <ProgressScreen user={user} /> : <Navigate to="/" />} />
+            <Route
+              path="/"
+              element={<ScanScreen key={`scan-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} />}
+            />
+            <Route
+              path="/progress"
+              element={
+                user
+                  ? <ProgressScreen key={`progress-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} />
+                  : <Navigate to="/" />
+              }
+            />
             <Route path="/profile" element={user ? <ProfileScreen user={user} /> : <Navigate to="/" />} />
           </Routes>
         </div>

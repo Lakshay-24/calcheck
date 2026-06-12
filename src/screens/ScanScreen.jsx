@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Camera, Upload } from 'lucide-react'
 import CameraModal, { restorePendingMeal } from '../components/CameraModal'
 import { getMealLogsToday, calculateDailyTotals, getUserProfile } from '../services/database'
 import { signInWithGoogle } from '../services/supabase'
+import { formatLocalTime, formatLocalWeekday, getUserTimezone } from '../utils/timezone'
 
-export default function ScanScreen({ user }) {
+export default function ScanScreen({ user, resumeSignal = 0 }) {
   const cameraInputRef = useRef(null)
+  const loadRequestRef = useRef(0)
   const [meals, setMeals] = useState([])
   const [totals, setTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [goals, setGoals] = useState({ calories: 2500, protein: 150 })
@@ -13,34 +15,28 @@ export default function ScanScreen({ user }) {
   const [pendingImage, setPendingImage] = useState(null)
   const [loading, setLoading] = useState(false)
   const [saveNotice, setSaveNotice] = useState(null)
+  const [recoveryKey, setRecoveryKey] = useState(0)
+  const timezone = getUserTimezone()
 
-  useEffect(() => {
-    if (user?.id) {
-      loadTodaysMeals()
-      restorePendingMealAfterLogin()
-    } else {
-      setMeals([])
-      setTotals({ calories: 0, protein: 0, carbs: 0, fat: 0 })
+  const loadTodaysMeals = useCallback(async (reason = 'screen-load') => {
+    if (!user?.id) {
+      setLoading(false)
+      return
     }
-  }, [user])
 
-  const restorePendingMealAfterLogin = async () => {
-    const saved = await restorePendingMeal(user, loadTodaysMeals)
-    if (saved) {
-      setSaveNotice('Your meal was saved after signing in.')
-      setTimeout(() => setSaveNotice(null), 4000)
-    }
-  }
-
-  const loadTodaysMeals = async () => {
-    if (!user?.id) return
+    const requestId = loadRequestRef.current + 1
+    loadRequestRef.current = requestId
 
     try {
+      console.info('[CalCheck] data refresh started', { screen: 'scan', reason })
       setLoading(true)
       const [mealLogs, profile] = await Promise.all([
-        getMealLogsToday(user.id),
+        getMealLogsToday(user.id, timezone),
         getUserProfile(user.id).catch(() => null)
       ])
+
+      if (loadRequestRef.current !== requestId) return
+
       setMeals(mealLogs)
       setTotals(calculateDailyTotals(mealLogs))
       if (profile) {
@@ -49,14 +45,71 @@ export default function ScanScreen({ user }) {
           protein: profile.protein_target || 150
         })
       }
+      console.info('[CalCheck] data refresh completed', { screen: 'scan', reason })
     } catch (error) {
       console.error('Error loading meals:', error)
     } finally {
-      setLoading(false)
+      if (loadRequestRef.current === requestId) {
+        setLoading(false)
+      }
     }
-  }
+  }, [timezone, user?.id])
 
-  const handleMealSaved = () => {
+  const restorePendingMealAfterLogin = useCallback(async () => {
+    const saved = await restorePendingMeal(user, loadTodaysMeals)
+    if (saved) {
+      setSaveNotice('Your meal was saved after signing in.')
+      setTimeout(() => setSaveNotice(null), 4000)
+    }
+  }, [loadTodaysMeals, user])
+
+  useEffect(() => {
+    if (user?.id) {
+      loadTodaysMeals('user-change')
+      restorePendingMealAfterLogin()
+    } else {
+      loadRequestRef.current += 1
+      setLoading(false)
+      setMeals([])
+      setTotals({ calories: 0, protein: 0, carbs: 0, fat: 0 })
+    }
+  }, [loadTodaysMeals, restorePendingMealAfterLogin, user])
+
+  useEffect(() => {
+    if (!resumeSignal || !user?.id) return
+    loadTodaysMeals('app-resume')
+  }, [loadTodaysMeals, resumeSignal, user?.id])
+
+  useEffect(() => {
+    if (!loading) return undefined
+
+    const retryTimer = window.setTimeout(() => {
+      console.warn('[CalCheck] loading timeout triggered', { screen: 'scan', seconds: 5 })
+      loadTodaysMeals('loading-timeout-retry')
+    }, 5000)
+
+    const recoveryTimer = window.setTimeout(() => {
+      console.warn('[CalCheck] loading timeout triggered', { screen: 'scan', seconds: 10 })
+      loadRequestRef.current += 1
+      setLoading(false)
+      setRecoveryKey((value) => value + 1)
+      window.setTimeout(() => loadTodaysMeals('soft-recovery'), 0)
+    }, 10000)
+
+    return () => {
+      window.clearTimeout(retryTimer)
+      window.clearTimeout(recoveryTimer)
+    }
+  }, [loadTodaysMeals, loading])
+
+  const handleMealSaved = (savedMeal) => {
+    console.info('[CalCheck] ScanScreen meal saved callback', {
+      id: savedMeal?.id,
+      timezone: savedMeal?.timezone,
+      local_date: savedMeal?.local_date,
+      meal_type: savedMeal?.meal_type
+    })
+
     if (user?.id) {
       loadTodaysMeals()
     }
@@ -94,7 +147,7 @@ export default function ScanScreen({ user }) {
   const proteinPercent = goals.protein ? Math.round((totals.protein / goals.protein) * 100) : 0
 
   return (
-    <div className="h-full w-full bg-white overflow-y-auto pb-24">
+    <div key={recoveryKey} className="h-full w-full bg-white overflow-y-auto pb-24">
       <CameraModal
         isOpen={cameraOpen}
         onClose={handleCloseModal}
@@ -148,7 +201,7 @@ export default function ScanScreen({ user }) {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold text-gray-900">Today's Progress</h2>
             <span className="text-xs font-semibold text-green-600 bg-green-100 px-3 py-1 rounded-full">
-              {new Date().toLocaleDateString('en-IN', { weekday: 'short' })}
+              {formatLocalWeekday(new Date(), timezone)}
             </span>
           </div>
 
@@ -260,7 +313,7 @@ export default function ScanScreen({ user }) {
                     {meal.calories} kcal • {meal.protein}g protein • {meal.carbs}g carbs • {meal.fat}g fat
                   </p>
                   <p className="text-xs text-gray-400 mt-1">
-                    {new Date(meal.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                    {formatLocalTime(meal.timestamp, meal.timezone || timezone)}
                   </p>
                 </div>
                 <div className="text-right">
