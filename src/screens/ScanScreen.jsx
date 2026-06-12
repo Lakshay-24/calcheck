@@ -163,7 +163,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
       <div className="px-6 py-6 space-y-6">
         {saveNotice && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-sm text-green-800">
+          <div className="bg-brand-50 border border-brand-300/60 rounded-xl p-3 text-sm text-brand-700">
             {saveNotice}
           </div>
         )}
@@ -171,7 +171,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         <div className="space-y-3">
           <button
             onClick={handleOpenCamera}
-            className="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold py-4 px-6 rounded-2xl shadow-md hover:shadow-lg transition-all duration-300 flex items-center justify-center gap-3 active:scale-95"
+            className="w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-brand-900 font-semibold py-4 px-6 rounded-2xl shadow-brand hover:shadow-lg transition-all duration-300 flex items-center justify-center gap-3 active:scale-95"
           >
             <Camera size={24} />
             <span>Open Camera</span>
@@ -197,16 +197,16 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           </label>
         </div>
 
-        <div className="bg-gradient-to-br from-green-50 to-transparent border border-green-100 rounded-3xl p-6 space-y-6">
+        <div className="bg-gradient-to-br from-brand-50 to-transparent border border-brand-300/50 rounded-3xl p-6 space-y-6">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold text-gray-900">Today's Progress</h2>
-            <span className="text-xs font-semibold text-green-600 bg-green-100 px-3 py-1 rounded-full">
+            <span className="text-xs font-semibold text-brand-700 bg-brand-50 px-3 py-1 rounded-full">
               {formatLocalWeekday(new Date(), timezone)}
             </span>
           </div>
 
           {!user && (
-  <div className="bg-white rounded-2xl p-4 border border-green-100">
+  <div className="bg-white rounded-2xl p-4 border border-brand-300/50">
     <p className="font-semibold text-gray-900 mb-1">
       Save meals and track progress
     </p>
@@ -242,7 +242,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
             </div>
             <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
               <div
-                className="bg-gradient-to-r from-green-400 to-green-600 h-full transition-all duration-500 rounded-full"
+                className="bg-gradient-to-r from-brand-400 to-brand-500 h-full transition-all duration-500 rounded-full"
                 style={{ width: `${Math.min(caloriePercent, 100)}%` }}
               />
             </div>
@@ -277,7 +277,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-green-200">
+          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-brand-300/50">
             <div className="space-y-1">
               <p className="text-xs text-gray-600">Carbs</p>
               <p className="text-lg font-bold text-gray-900">{totals.carbs}g</p>
@@ -305,7 +305,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
             {meals.map((meal) => (
               <div
                 key={meal.id}
-                className="bg-white border border-gray-200 rounded-xl p-4 flex items-start justify-between hover:border-green-300 transition-colors"
+                className="bg-white border border-gray-200 rounded-xl p-4 flex items-start justify-between hover:border-brand-300 transition-colors"
               >
                 <div className="flex-1">
                   <p className="font-semibold text-gray-900">{meal.food_name}</p>

@@ -6,6 +6,24 @@ export const getUserTimezone = () => {
   }
 }
 
+export const parseDatabaseTimestamp = (value) => {
+  if (value instanceof Date) return value
+
+  if (typeof value !== 'string') {
+    return new Date(value)
+  }
+
+  const trimmedValue = value.trim()
+
+  if (
+    /^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(trimmedValue)
+  ) {
+    return new Date(`${trimmedValue.replace(' ', 'T')}Z`)
+  }
+
+  return new Date(trimmedValue)
+}
+
 const getDateParts = (date = new Date(), timeZone = getUserTimezone()) => {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -102,7 +120,7 @@ export const formatLocalTime = (date, timeZone = getUserTimezone()) => {
     timeZone,
     hour: '2-digit',
     minute: '2-digit'
-  }).format(new Date(date))
+  }).format(parseDatabaseTimestamp(date))
 }
 
 export const formatLocalWeekday = (date = new Date(), timeZone = getUserTimezone()) => {

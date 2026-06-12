@@ -22,24 +22,24 @@ export default function AnalysisScreen() {
   }, [])
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-green-50 to-white">
-
-      {/* Loader */}
+    <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-brand-50 to-white">
       <div className="relative mb-10">
-        <div className="w-28 h-28 rounded-full border-4 border-green-200 animate-spin"></div>
-
-        <div className="absolute inset-3 rounded-full bg-gradient-to-r from-green-400 to-green-600 animate-pulse"></div>
-
-        <div className="absolute inset-0 flex items-center justify-center text-3xl">
-          🍽️
+        <div className="w-28 h-28 rounded-full border-4 border-brand-300 animate-spin" />
+        <div className="absolute inset-3 rounded-full bg-gradient-to-r from-brand-400 to-brand-500 animate-pulse" />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <img
+            src="/logo.png"
+            alt=""
+            className="w-16 h-16 rounded-2xl object-cover shadow-brand"
+          />
         </div>
       </div>
 
-      <h2 className="text-2xl font-bold text-gray-900 mb-2">
+      <h2 className="text-2xl font-bold text-ink mb-2">
         Analyzing your meal
       </h2>
 
-      <p className="text-gray-500 text-center mb-8">
+      <p className="text-muted text-center mb-8">
         AI is estimating calories and nutrition
       </p>
 
@@ -56,21 +56,21 @@ export default function AnalysisScreen() {
               }`}
             >
               {completed ? (
-                <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
-                  <Check size={14} className="text-white" />
+                <div className="w-6 h-6 rounded-full bg-brand-500 flex items-center justify-center">
+                  <Check size={14} className="text-brand-900" />
                 </div>
               ) : active ? (
-                <div className="w-6 h-6 rounded-full border-2 border-green-500 flex items-center justify-center">
-                  <div className="w-2 h-2 rounded-full bg-green-500 animate-ping"></div>
+                <div className="w-6 h-6 rounded-full border-2 border-brand-500 flex items-center justify-center">
+                  <div className="w-2 h-2 rounded-full bg-brand-500 animate-ping" />
                 </div>
               ) : (
-                <div className="w-6 h-6 rounded-full bg-gray-200"></div>
+                <div className="w-6 h-6 rounded-full bg-gray-200" />
               )}
 
               <span
                 className={`text-sm ${
                   active
-                    ? 'font-semibold text-gray-900'
+                    ? 'font-semibold text-ink'
                     : completed
                     ? 'text-gray-700'
                     : 'text-gray-400'
@@ -83,23 +83,21 @@ export default function AnalysisScreen() {
         })}
       </div>
 
-      {/* Loading dots */}
       <div className="flex gap-2 mt-10">
-        <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce"></div>
+        <div className="w-2 h-2 bg-brand-500 rounded-full animate-bounce" />
         <div
-          className="w-2 h-2 bg-green-500 rounded-full animate-bounce"
+          className="w-2 h-2 bg-brand-500 rounded-full animate-bounce"
           style={{ animationDelay: '0.15s' }}
         />
         <div
-          className="w-2 h-2 bg-green-500 rounded-full animate-bounce"
+          className="w-2 h-2 bg-brand-500 rounded-full animate-bounce"
           style={{ animationDelay: '0.3s' }}
         />
       </div>
 
       <p className="text-xs text-gray-400 mt-4">
-        Analysis usually takes 5–10 seconds
+        Analysis usually takes 5-10 seconds
       </p>
-
     </div>
   )
 }

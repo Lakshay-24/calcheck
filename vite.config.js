@@ -7,12 +7,12 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'robots.txt'],
+      includeAssets: ['icon-192.png', 'icon-512.png', 'logo.png', 'robots.txt'],
       manifest: {
-        name: 'CalCheck - Food Calorie Tracker',
-        short_name: 'CalCheck',
+        name: 'calcheck - Food Calorie Tracker',
+        short_name: 'calcheck',
         description: 'Snap food. Track calories & protein.',
-        theme_color: '#22C55E',
+        theme_color: '#11F5F6',
         background_color: '#FFFFFF',
         display: 'standalone',
         scope: '/',

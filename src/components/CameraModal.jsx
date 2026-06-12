@@ -244,7 +244,7 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
               <p className="text-sm text-gray-600 mb-6">{error}</p>
               <button
                 onClick={handleClose}
-                className="bg-green-500 text-white px-6 py-3 rounded-xl font-semibold hover:bg-green-600"
+                className="bg-gradient-to-r from-brand-400 to-brand-500 text-brand-900 px-6 py-3 rounded-xl font-semibold hover:from-brand-500 hover:to-brand-400"
               >
                 Try another image
               </button>
@@ -320,14 +320,14 @@ function DesktopCameraView({ videoRef, canvasRef, error, onCapture, onClose }) {
   if (error) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-6 text-center min-h-[60vh]">
-        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
+        <div className="w-16 h-16 bg-brand-50 rounded-full flex items-center justify-center mb-4">
           <CameraGlyph />
         </div>
         <h3 className="text-lg font-bold text-gray-900 mb-2">Camera unavailable</h3>
         <p className="text-gray-600 mb-6">{error}</p>
         <button
           onClick={onClose}
-          className="bg-green-500 text-white px-6 py-2 rounded-lg font-semibold hover:bg-green-600"
+          className="bg-gradient-to-r from-brand-400 to-brand-500 text-brand-900 px-6 py-2 rounded-lg font-semibold hover:from-brand-500 hover:to-brand-400"
         >
           Back to Scan
         </button>
@@ -354,7 +354,7 @@ function DesktopCameraView({ videoRef, canvasRef, error, onCapture, onClose }) {
       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black to-transparent p-6 flex justify-center items-end">
         <button
           onClick={onCapture}
-          className="w-20 h-20 bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-lg transition-all active:scale-95"
+          className="w-20 h-20 bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 rounded-full flex items-center justify-center shadow-brand transition-all active:scale-95"
         >
           <div className="w-16 h-16 border-4 border-white rounded-full" />
         </button>
@@ -368,13 +368,13 @@ function CameraGlyph() {
     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path
         d="M4 8.5A2.5 2.5 0 0 1 6.5 6H8l1.4-1.8A2 2 0 0 1 11 3.5h2a2 2 0 0 1 1.6.7L16 6h1.5A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-8Z"
-        stroke="#16a34a"
+        stroke="rgb(var(--color-brand-deep))"
         strokeWidth="1.8"
         strokeLinejoin="round"
       />
       <path
         d="M12 15.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
-        stroke="#16a34a"
+        stroke="rgb(var(--color-brand-deep))"
         strokeWidth="1.8"
       />
     </svg>

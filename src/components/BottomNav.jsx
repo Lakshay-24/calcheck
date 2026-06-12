@@ -27,7 +27,7 @@ export default function BottomNav() {
               onClick={() => navigate(tab.path)}
               className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 transition-all duration-300 relative group ${
                 active
-                  ? 'text-green-600'
+                  ? 'text-brand-700'
                   : 'text-gray-500 hover:text-gray-700'
               }`}
             >
@@ -42,7 +42,7 @@ export default function BottomNav() {
                 />
                 {/* Active indicator dot */}
                 {active && (
-                  <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-green-600 rounded-full"></div>
+                  <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-brand-500 rounded-full"></div>
                 )}
               </div>
 
@@ -57,7 +57,7 @@ export default function BottomNav() {
 
               {/* Active background indicator */}
               {active && (
-                <div className="absolute inset-0 bg-green-50 -z-10 rounded-2xl opacity-0"></div>
+                <div className="absolute inset-0 bg-brand-50 -z-10 rounded-2xl opacity-0"></div>
               )}
             </button>
           )

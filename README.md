@@ -1,10 +1,10 @@
-# CalCheck - Premium Mobile-First Calorie Tracker PWA
+# calcheck - Premium Mobile-First Calorie Tracker PWA
 
 Snap food. Track calories & protein.
 
 ## Overview
 
-CalCheck is a premium mobile-first Progressive Web App designed for Indian gym-goers (18-35) to track daily calorie and protein intake by photographing food items.
+calcheck is a premium mobile-first Progressive Web App designed for Indian gym-goers (18-35) to track daily calorie and protein intake by photographing food items.
 
 **Core UX:** Camera-first, minimal UI, beautiful results, instant feel.
 
@@ -98,7 +98,7 @@ Progress Updates
 
 ## Design System
 
-- **Colors:** White background, green (#22C55E) primary accent
+- **Colors:** White background, aqua mint (#80F9CB), mint core (#46E8C2), cyan/turquoise (#11F5F6), deep text (#102A2A)
 - **Typography:** Large numbers (48-56px), clean hierarchy
 - **Components:** Rounded cards, iOS-style navigation, smooth transitions
 - **Philosophy:** Premium consumer app, simplicity over features
@@ -206,4 +206,4 @@ Private - All rights reserved
 
 ---
 
-**CalCheck:** Snap food. Track progress. 💚
+**calcheck:** Snap food. Track progress.

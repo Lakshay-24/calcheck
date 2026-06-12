@@ -1,9 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Heart } from 'lucide-react'
 
+const PORTION_OPTIONS = [
+  { label: 'Small', multiplier: 0.75 },
+  { label: 'Medium', multiplier: 1 },
+  { label: 'Large', multiplier: 1.5 }
+]
+
 export default function ResultsScreen({ result, image, onSave, onRetake, user, isSaving = false }) {
   const [saving, setSaving] = useState(false)
   const [selectedPredictionId, setSelectedPredictionId] = useState('primary')
+  const [selectedPortion, setSelectedPortion] = useState('Medium')
 
   useEffect(() => {
     setSelectedPredictionId('primary')
@@ -19,29 +26,39 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
     predictionOptions[0]
 
   const selectedResult = selectedOption?.result || result
+  const adjustedResult = useMemo(
+    () => applyPortionAdjustment(selectedResult, selectedPortion),
+    [selectedPortion, selectedResult]
+  )
+
+  useEffect(() => {
+    setSelectedPortion(normalizePortionSize(selectedResult?.portion_size))
+  }, [selectedPredictionId, selectedResult?.portion_size])
 
   const handleSave = async () => {
     console.info('[CalCheck] ResultsScreen save selected', {
-      food_name: selectedResult?.food_name,
-      timezone: selectedResult?.timezone,
-      local_date: selectedResult?.local_date,
-      meal_type: selectedResult?.meal_type
+      food_name: adjustedResult?.food_name,
+      timezone: adjustedResult?.timezone,
+      local_date: adjustedResult?.local_date,
+      meal_type: adjustedResult?.meal_type,
+      portion_size: adjustedResult?.portion_size,
+      portion_multiplier: adjustedResult?.portion_multiplier
     })
 
     setSaving(true)
     try {
-      await onSave(selectedResult)
+      await onSave(adjustedResult)
     } finally {
       setSaving(false)
     }
   }
 
   const savingState = isSaving || saving
-  const confidence = selectedResult?.confidence ?? null
+  const confidence = adjustedResult?.confidence ?? null
   const isLowConfidence = confidence !== null && confidence < 0.6
 
   const getConfidenceLabel = (value) => {
-    if (value >= 0.8) return { text: 'High confidence', className: 'bg-green-100 text-green-800' }
+    if (value >= 0.8) return { text: 'High confidence', className: 'bg-brand-50 text-brand-700' }
     if (value >= 0.6) return { text: 'Moderate confidence', className: 'bg-yellow-100 text-yellow-800' }
     return { text: 'Low confidence', className: 'bg-orange-100 text-orange-800' }
   }
@@ -62,7 +79,7 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
   const getRecommendationColor = (rec) => {
     switch (rec) {
       case 'Fat Loss':
-        return 'bg-green-100 text-green-800'
+        return 'bg-brand-50 text-brand-700'
       case 'Muscle Gain':
         return 'bg-blue-100 text-blue-800'
       case 'Maintenance':
@@ -88,7 +105,7 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
       <div className="px-6 py-6 space-y-6">
         <div>
           <h2 className="text-4xl font-bold text-gray-900 leading-tight">
-            {selectedResult?.food_name || 'Meal'}
+            {adjustedResult?.food_name || 'Meal'}
           </h2>
           <div className="flex flex-wrap items-center gap-2 mt-2">
             <p className="text-sm text-gray-500">Typical serving</p>
@@ -117,7 +134,7 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
                     onClick={() => setSelectedPredictionId(option.id)}
                     className={`text-xs font-semibold px-3 py-1 rounded-full border transition-all ${
                       option.id === selectedOption?.id
-                        ? 'bg-green-100 text-green-800 border-green-300'
+                        ? 'bg-brand-50 text-brand-700 border-brand-300'
                         : option.disabled
                         ? 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed'
                         : 'bg-gray-100 text-gray-700 border-transparent hover:bg-gray-200'
@@ -133,34 +150,51 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
           )}
         </div>
 
-        {selectedResult?.portion_size && (
-          <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-2xl p-4">
-            <div className="flex items-center justify-between">
+        {adjustedResult?.portion_size && (
+          <div className="bg-gradient-to-r from-brand-50 to-white border border-brand-300/60 rounded-2xl p-4">
+            <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-semibold text-indigo-700 uppercase tracking-widest">
+                <p className="text-xs font-semibold text-brand-700 uppercase tracking-widest">
                   Estimated Portion
                 </p>
 
-                <p className="text-2xl font-bold text-indigo-900 mt-1">
-                  {selectedResult.portion_size}
+                <p className="text-2xl font-bold text-brand-900 mt-1">
+                  {adjustedResult.portion_size}
                 </p>
 
-                {selectedResult.estimated_grams > 0 && (
-                  <p className="text-sm text-indigo-600 mt-1">
-                    ~{Math.round(selectedResult.estimated_grams)}g
+                {adjustedResult.estimated_grams > 0 && (
+                  <p className="text-sm text-brand-700 mt-1">
+                    ~{Math.round(adjustedResult.estimated_grams)}g
                   </p>
                 )}
               </div>
 
               <div className="text-right">
-                <p className="text-xs text-indigo-600">
+                <p className="text-xs text-brand-700">
                   Quantity Confidence
                 </p>
 
-                <p className="text-lg font-semibold text-indigo-900">
-                  {Math.round((selectedResult.portion_confidence ?? 0.5) * 100)}%
+                <p className="text-lg font-semibold text-brand-900">
+                  {Math.round((adjustedResult.portion_confidence ?? 0.5) * 100)}%
                 </p>
               </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 mt-4">
+              {PORTION_OPTIONS.map((portion) => (
+                <button
+                  key={portion.label}
+                  type="button"
+                  onClick={() => setSelectedPortion(portion.label)}
+                  className={`text-sm font-semibold py-2 rounded-xl border transition-all ${
+                    selectedPortion === portion.label
+                      ? 'bg-brand-500 text-brand-900 border-brand-500'
+                      : 'bg-white text-brand-700 border-brand-300 hover:border-brand-500'
+                  }`}
+                >
+                  {portion.label}
+                </button>
+              ))}
             </div>
           </div>
         )}
@@ -171,7 +205,7 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
               Calories
             </p>
             <p className="text-4xl font-bold text-orange-900">
-              {selectedResult?.calories || 0}
+              {adjustedResult?.calories || 0}
             </p>
             <p className="text-xs text-orange-600 mt-1">kcal</p>
           </div>
@@ -181,25 +215,25 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
               Protein
             </p>
             <p className="text-4xl font-bold text-blue-900">
-              {selectedResult?.protein || 0}
+              {adjustedResult?.protein || 0}
             </p>
             <p className="text-xs text-blue-600 mt-1">grams</p>
           </div>
         </div>
 
-        <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-2xl p-6">
+        <div className="bg-gradient-to-r from-brand-50 to-white border border-brand-300/60 rounded-2xl p-6">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-green-700">Meal Score</span>
-            <Heart size={18} className="text-green-600" />
+            <span className="text-sm font-semibold text-brand-700">Meal Score</span>
+            <Heart size={18} className="text-brand-600" />
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-5xl font-bold text-green-900">{selectedResult?.meal_score || 0}</span>
-            <span className="text-lg text-green-700">/100</span>
+            <span className="text-5xl font-bold text-brand-900">{adjustedResult?.meal_score || 0}</span>
+            <span className="text-lg text-brand-700">/100</span>
           </div>
-          <p className="text-xs text-green-600 mt-3">
-            {selectedResult?.meal_score >= 80
+          <p className="text-xs text-brand-700 mt-3">
+            {adjustedResult?.meal_score >= 80
               ? 'Excellent macro balance'
-              : selectedResult?.meal_score >= 60
+              : adjustedResult?.meal_score >= 60
               ? 'Good choice'
               : 'Could be better'}
           </p>
@@ -218,7 +252,7 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
                 <p className="text-xs text-gray-500">Energy source</p>
               </div>
             </div>
-            <p className="text-lg font-bold text-gray-900">{selectedResult?.carbs || 0}g</p>
+            <p className="text-lg font-bold text-gray-900">{adjustedResult?.carbs || 0}g</p>
           </div>
 
           <div className="flex items-center justify-between bg-gray-50 rounded-lg p-3">
@@ -229,16 +263,16 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
                 <p className="text-xs text-gray-500">Essential nutrients</p>
               </div>
             </div>
-            <p className="text-lg font-bold text-gray-900">{selectedResult?.fat || 0}g</p>
+            <p className="text-lg font-bold text-gray-900">{adjustedResult?.fat || 0}g</p>
           </div>
         </div>
 
         <div className="flex gap-2 flex-wrap">
-          <span className={`text-xs font-semibold px-3 py-1 rounded-full ${getProteinColor(selectedResult?.protein_level)}`}>
-            {selectedResult?.protein_level || 'Unknown'} Protein
+          <span className={`text-xs font-semibold px-3 py-1 rounded-full ${getProteinColor(adjustedResult?.protein_level)}`}>
+            {adjustedResult?.protein_level || 'Unknown'} Protein
           </span>
-          <span className={`text-xs font-semibold px-3 py-1 rounded-full ${getRecommendationColor(selectedResult?.recommended_for)}`}>
-            {selectedResult?.recommended_for || 'Maintenance'}
+          <span className={`text-xs font-semibold px-3 py-1 rounded-full ${getRecommendationColor(adjustedResult?.recommended_for)}`}>
+            {adjustedResult?.recommended_for || 'Maintenance'}
           </span>
         </div>
 
@@ -247,14 +281,14 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
             <button
               onClick={handleSave}
               disabled={savingState}
-              className="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold py-4 px-6 rounded-2xl transition-all active:scale-95 disabled:opacity-70"
+              className="w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-brand-900 font-semibold py-4 px-6 rounded-2xl shadow-brand transition-all active:scale-95 disabled:opacity-70"
             >
               {savingState ? 'Saving...' : 'Save Meal'}
             </button>
           ) : (
             <button
               onClick={handleSave}
-              className="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold py-4 px-6 rounded-2xl transition-all active:scale-95"
+              className="w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-brand-900 font-semibold py-4 px-6 rounded-2xl shadow-brand transition-all active:scale-95"
             >
               Login to Save
             </button>
@@ -363,4 +397,35 @@ const pickCandidateNutrition = (candidate) => {
 
     return values
   }, {})
+}
+
+const normalizePortionSize = (value) =>
+  PORTION_OPTIONS.some((portion) => portion.label === value) ? value : 'Medium'
+
+const getPortionMultiplier = (portionSize) =>
+  PORTION_OPTIONS.find((portion) => portion.label === portionSize)?.multiplier || 1
+
+const scaleNutritionValue = (value, multiplier) => {
+  const numberValue = Number(value)
+  if (!Number.isFinite(numberValue)) return value || 0
+
+  return Math.round(numberValue * multiplier)
+}
+
+const applyPortionAdjustment = (result, portionSize) => {
+  if (!result) return result
+
+  const normalizedPortionSize = normalizePortionSize(portionSize)
+  const portionMultiplier = getPortionMultiplier(normalizedPortionSize)
+
+  return {
+    ...result,
+    calories: scaleNutritionValue(result.calories, portionMultiplier),
+    protein: scaleNutritionValue(result.protein, portionMultiplier),
+    carbs: scaleNutritionValue(result.carbs, portionMultiplier),
+    fat: scaleNutritionValue(result.fat, portionMultiplier),
+    estimated_grams: scaleNutritionValue(result.estimated_grams, portionMultiplier),
+    portion_size: normalizedPortionSize,
+    portion_multiplier: portionMultiplier
+  }
 }

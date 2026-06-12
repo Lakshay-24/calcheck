@@ -92,6 +92,7 @@ CREATE TABLE meal_logs (
   protein_level TEXT,
   recommended_for TEXT,
   portion_size TEXT,
+  portion_multiplier NUMERIC,
   estimated_grams NUMERIC,
   portion_confidence NUMERIC,
   confidence NUMERIC,

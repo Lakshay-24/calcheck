@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --color-brand-mint: 128 249 203;
+  --color-brand-core: 70 232 194;
+  --color-brand-cyan: 17 245 246;
+  --color-brand-deep: 16 42 42;
+  --color-brand-soft: 232 255 248;
+  --color-surface: 255 255 255;
+  --color-surface-muted: 246 250 249;
+  --color-border: 219 232 229;
+  --color-text: 16 42 42;
+  --color-text-muted: 91 111 110;
+  --shadow-brand: 0 18px 45px rgba(17, 245, 246, 0.22);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -17,8 +31,8 @@ html, body, #root {
 }
 
 body {
-  background-color: #FFFFFF;
-  color: #1F2937;
+  background-color: rgb(var(--color-surface));
+  color: rgb(var(--color-text));
   overflow: hidden;
 }
 
@@ -35,16 +49,16 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #F3F4F6;
+  background: rgb(var(--color-surface-muted));
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #D1D5DB;
+  background: rgb(var(--color-border));
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #9CA3AF;
+  background: rgb(var(--color-text-muted) / 0.45);
 }
 
 /* Smooth transitions */
@@ -66,7 +80,7 @@ input, textarea {
 }
 
 input:focus, textarea:focus {
-  outline: 2px solid #22C55E;
+  outline: 2px solid rgb(var(--color-brand-cyan));
   outline-offset: 2px;
 }
 

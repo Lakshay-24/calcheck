@@ -4,7 +4,8 @@ import {
   getLocalDate,
   getMealTypeForLocalTime,
   getStartOfLocalDay,
-  getUserTimezone
+  getUserTimezone,
+  parseDatabaseTimestamp
 } from '../utils/timezone'
 
 // Meal CRUD operations
@@ -149,7 +150,7 @@ export const calculateWeeklyBreakdown = (mealLogs, timezone = getUserTimezone())
   const breakdown = {}
 
   mealLogs.forEach(meal => {
-    const date = meal.local_date || getLocalDate(new Date(meal.timestamp), meal.timezone || timezone)
+    const date = meal.local_date || getLocalDate(parseDatabaseTimestamp(meal.timestamp), meal.timezone || timezone)
     if (!breakdown[date]) {
       breakdown[date] = { calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 }
     }

@@ -24,8 +24,8 @@ export default function ProfileScreen({ user }) {
       </div>
 
       <div className="px-6 py-6 space-y-6">
-        <div className="bg-gradient-to-br from-green-50 to-white border border-green-100 rounded-2xl p-6">
-          <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center text-white text-2xl font-bold mb-4">
+        <div className="bg-gradient-to-br from-brand-50 to-white border border-brand-300/50 rounded-2xl p-6">
+          <div className="w-16 h-16 bg-gradient-to-br from-brand-400 to-brand-500 rounded-full flex items-center justify-center text-brand-900 text-2xl font-bold mb-4 shadow-brand">
             {user?.email?.[0]?.toUpperCase() || '?'}
           </div>
           <p className="text-sm text-gray-500">Signed in as</p>

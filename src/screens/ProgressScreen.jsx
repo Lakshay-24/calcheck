@@ -121,7 +121,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
       </div>
 
       <div className="px-6 py-6 space-y-6">
-        <div className="bg-gradient-to-br from-green-50 to-transparent border border-green-100 rounded-3xl p-6 space-y-5">
+        <div className="bg-gradient-to-br from-brand-50 to-transparent border border-brand-300/50 rounded-3xl p-6 space-y-5">
           <h2 className="text-lg font-bold text-gray-900">Today</h2>
 
           <div className="grid grid-cols-2 gap-4">
@@ -144,7 +144,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
               <div
-                className="bg-green-500 h-2 rounded-full transition-all"
+                className="bg-gradient-to-r from-brand-400 to-brand-500 h-2 rounded-full transition-all"
                 style={{ width: `${Math.min(caloriePercent, 100)}%` }}
               />
             </div>
@@ -163,7 +163,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-green-200">
+          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-brand-300/50">
             <div>
               <p className="text-xs text-gray-600">Carbs today</p>
               <p className="text-lg font-bold">{todayTotals.carbs}g</p>
@@ -215,7 +215,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="font-bold text-green-600">{meal.meal_score}</p>
+                  <p className="font-bold text-brand-700">{meal.meal_score}</p>
                   <p className="text-xs text-gray-500">score</p>
                 </div>
               </div>

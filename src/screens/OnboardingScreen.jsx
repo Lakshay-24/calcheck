@@ -9,88 +9,68 @@ export default function OnboardingScreen({ onComplete }) {
 
   return (
     <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
-      {/* Background gradient accent */}
-      <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-b from-green-50 to-transparent opacity-60 -z-10"></div>
-      <div className="absolute bottom-0 left-0 w-80 h-80 bg-gradient-to-t from-green-50 to-transparent opacity-40 -z-10"></div>
+      <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-b from-brand-50 to-transparent opacity-80 -z-10" />
+      <div className="absolute bottom-0 left-0 w-80 h-80 bg-gradient-to-t from-brand-50 to-transparent opacity-60 -z-10" />
 
-      {/* Main content */}
       <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-        {/* Icon/Logo */}
         <div className="mb-8">
-          <div className="w-24 h-24 bg-gradient-to-br from-green-400 to-green-600 rounded-3xl flex items-center justify-center shadow-lg">
-            <div className="text-5xl">📸</div>
+          <div className="w-24 h-24 rounded-3xl overflow-hidden shadow-brand">
+            <img
+              src="/logo.png"
+              alt="calcheck"
+              className="h-full w-full object-cover"
+            />
           </div>
         </div>
 
-        {/* Headline */}
-        <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-4 leading-tight">
-          Snap Food
+        <h1 className="text-5xl md:text-6xl font-bold text-ink mb-4 leading-tight">
+          calcheck
         </h1>
 
-        {/* Subheading */}
-        <p className="text-xl md:text-2xl text-gray-600 mb-6 leading-relaxed max-w-md">
+        <p className="text-xl md:text-2xl text-muted mb-6 leading-relaxed max-w-md">
           Track calories & protein in seconds
         </p>
 
-        {/* Description */}
         <div className="max-w-md space-y-3 mb-12">
-          <div className="flex items-start gap-3">
-            <div className="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0 mt-1">
-              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+          {[
+            'Take a photo of any meal',
+            'AI analyzes nutrition instantly',
+            'Track your daily progress'
+          ].map((item) => (
+            <div key={item} className="flex items-start gap-3">
+              <div className="w-6 h-6 rounded-full bg-brand-50 flex items-center justify-center flex-shrink-0 mt-1">
+                <div className="w-2 h-2 bg-brand-500 rounded-full" />
+              </div>
+              <p className="text-muted text-left">{item}</p>
             </div>
-            <p className="text-gray-600 text-left">
-              Take a photo of any meal
-            </p>
-          </div>
-
-          <div className="flex items-start gap-3">
-            <div className="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0 mt-1">
-              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-            </div>
-            <p className="text-gray-600 text-left">
-              AI analyzes nutrition instantly
-            </p>
-          </div>
-
-          <div className="flex items-start gap-3">
-            <div className="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0 mt-1">
-              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-            </div>
-            <p className="text-gray-600 text-left">
-              Track your daily progress
-            </p>
-          </div>
+          ))}
         </div>
 
-        {/* Trust indicators */}
         <div className="mb-12 space-y-2">
           <p className="text-xs text-gray-500 uppercase tracking-widest font-semibold">
             Powered by
           </p>
-          <div className="flex items-center justify-center gap-2 text-sm text-gray-600">
+          <div className="flex items-center justify-center gap-2 text-sm text-muted">
             <span className="font-semibold">OpenAI</span>
-            <span className="text-gray-400">•</span>
+            <span className="text-gray-400">-</span>
             <span className="font-semibold">Instant Results</span>
           </div>
         </div>
 
-        {/* CTA Button */}
         <button
           onClick={handleGetStarted}
-          className="w-full max-w-sm bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold py-4 px-8 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 flex items-center justify-center gap-2 active:scale-95"
+          className="w-full max-w-sm bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-brand-900 font-semibold py-4 px-8 rounded-2xl shadow-brand hover:shadow-xl transition-all duration-300 flex items-center justify-center gap-2 active:scale-95"
         >
           <span>Get Started</span>
-          <ChevronRight size={20} className="transition-transform group-hover:translate-x-1" />
+          <ChevronRight size={20} />
         </button>
 
-        {/* Privacy note */}
         <p className="text-xs text-gray-500 mt-6">
           We never store your photos. Your data is private.
         </p>
       </div>
 
-      {/* Bottom decorative element */}
-      <div className="h-1 bg-gradient-to-r from-transparent via-green-200 to-transparent"></div>
+      <div className="h-1 bg-gradient-to-r from-transparent via-brand-300 to-transparent" />
     </div>
   )
 }
