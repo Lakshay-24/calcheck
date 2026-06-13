@@ -6,7 +6,12 @@ import './index.css'
 // Register PWA service worker
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW registration failed:', err))
+    navigator.serviceWorker
+      .register('/sw.js')
+      .then((registration) => {
+        registration.update().catch(() => {})
+      })
+      .catch(err => console.log('SW registration failed:', err))
   })
 }
 

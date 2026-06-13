@@ -16,6 +16,8 @@ export default function ProfileScreen({ user }) {
   const [subscriptionLoading, setSubscriptionLoading] = useState(false)
   const [subscriptionError, setSubscriptionError] = useState(null)
   const [subscriptionNotice, setSubscriptionNotice] = useState(null)
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false)
+  const [cancelStep, setCancelStep] = useState(null)
 
   useEffect(() => {
     if (!user?.id) return
@@ -106,11 +108,32 @@ export default function ProfileScreen({ user }) {
       setSubscriptionError(error?.message || 'Could not cancel subscription.')
     } finally {
       setSubscriptionLoading(false)
+      setCancelStep(null)
     }
   }
 
   return (
     <div className="h-full w-full bg-white overflow-y-auto pb-24">
+      <SignOutConfirmModal
+        isOpen={showSignOutConfirm}
+        loading={signingOut}
+        onStay={() => setShowSignOutConfirm(false)}
+        onSignOut={handleSignOut}
+      />
+
+      <CancelSubscriptionStepOneModal
+        isOpen={cancelStep === 'intro'}
+        onKeepPro={() => setCancelStep(null)}
+        onContinue={() => setCancelStep('confirm')}
+      />
+
+      <CancelSubscriptionStepTwoModal
+        isOpen={cancelStep === 'confirm'}
+        loading={subscriptionLoading}
+        onStayPro={() => setCancelStep(null)}
+        onCancelSubscription={handleCancelSubscription}
+      />
+
       <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4">
         <h1 className="text-2xl font-bold text-gray-900">Profile</h1>
         <p className="text-sm text-gray-500 mt-1">Your account</p>
@@ -134,7 +157,7 @@ export default function ProfileScreen({ user }) {
           notice={subscriptionNotice}
           onSubscribe={handleSubscribe}
           onManage={handleManageSubscription}
-          onCancel={handleCancelSubscription}
+          onCancel={() => setCancelStep('intro')}
         />
 
         <div className="bg-gray-50 rounded-2xl p-4 space-y-2">
@@ -145,13 +168,130 @@ export default function ProfileScreen({ user }) {
         </div>
 
         <button
-          onClick={handleSignOut}
+          onClick={() => setShowSignOutConfirm(true)}
           disabled={signingOut}
           className="w-full flex items-center justify-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-900 font-semibold py-4 px-6 rounded-2xl transition-all active:scale-95 disabled:opacity-70"
         >
           <LogOut size={20} />
           {signingOut ? 'Signing out...' : 'Sign Out'}
         </button>
+      </div>
+    </div>
+  )
+}
+
+function SignOutConfirmModal({ isOpen, loading, onStay, onSignOut }) {
+  return (
+    <ConfirmModal
+      isOpen={isOpen}
+      title="Sign out of CalCheck?"
+      body="You can sign back in anytime with your Google account."
+      loading={loading}
+      primaryLabel="Stay Signed In"
+      secondaryLabel="Sign Out"
+      secondaryLoadingLabel="Signing out..."
+      onPrimary={onStay}
+      onSecondary={onSignOut}
+      secondaryTone="danger"
+    />
+  )
+}
+
+function CancelSubscriptionStepOneModal({ isOpen, onKeepPro, onContinue }) {
+  return (
+    <ConfirmModal
+      isOpen={isOpen}
+      title="Leave CalCheck Pro?"
+      body={
+        <>
+          <p>Your subscription will remain active until your current billing period ends.</p>
+          <p className="mt-3">You won't be charged again after cancellation.</p>
+        </>
+      }
+      primaryLabel="Keep Pro"
+      secondaryLabel="Continue"
+      onPrimary={onKeepPro}
+      onSecondary={onContinue}
+    />
+  )
+}
+
+function CancelSubscriptionStepTwoModal({ isOpen, loading, onStayPro, onCancelSubscription }) {
+  return (
+    <ConfirmModal
+      isOpen={isOpen}
+      title="We'll miss you 👋"
+      body={
+        <>
+          <p>You'll lose access to:</p>
+          <div className="mt-4 space-y-2">
+            <p>• Unlimited food scans</p>
+            <p>• Future premium nutrition features</p>
+            <p>• Pro member benefits</p>
+          </div>
+          <p className="mt-4">
+            Your Pro access will remain active until the end of your current billing period.
+          </p>
+          <p className="mt-4 font-semibold text-gray-900">Are you sure you want to cancel?</p>
+        </>
+      }
+      loading={loading}
+      primaryLabel="Stay Pro"
+      secondaryLabel="Cancel Subscription"
+      secondaryLoadingLabel="Cancelling..."
+      onPrimary={onStayPro}
+      onSecondary={onCancelSubscription}
+      secondaryTone="danger"
+    />
+  )
+}
+
+function ConfirmModal({
+  isOpen,
+  title,
+  body,
+  loading = false,
+  primaryLabel,
+  secondaryLabel,
+  secondaryLoadingLabel,
+  onPrimary,
+  onSecondary,
+  secondaryTone = 'neutral'
+}) {
+  if (!isOpen) return null
+
+  const secondaryClass = secondaryTone === 'danger'
+    ? 'bg-red-50 hover:bg-red-100 text-red-700 border border-red-100'
+    : 'bg-gray-100 hover:bg-gray-200 text-gray-900'
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/55 flex items-end sm:items-center sm:justify-center px-0 sm:px-4">
+      <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-6 shadow-[0_-18px_50px_rgba(16,42,42,0.18)]">
+        <h2 className="text-2xl font-bold text-gray-900 pr-8">{title}</h2>
+        <div className="text-sm leading-6 text-gray-600 mt-3">
+          {typeof body === 'string' ? <p>{body}</p> : body}
+        </div>
+
+        <div className="mt-7 space-y-3">
+          <button
+            type="button"
+            onClick={onPrimary}
+            disabled={loading}
+            className="w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 disabled:opacity-70 disabled:cursor-not-allowed text-brand-900 font-bold py-3 px-5 rounded-2xl shadow-brand"
+          >
+            {primaryLabel}
+          </button>
+
+          <button
+            type="button"
+            onClick={onSecondary}
+            disabled={loading}
+            className={`w-full disabled:opacity-70 disabled:cursor-not-allowed font-semibold py-3 px-5 rounded-2xl flex items-center justify-center gap-2 ${secondaryClass}`}
+          >
+            {loading && <Loader2 size={18} className="animate-spin" />}
+            <span>{loading ? (secondaryLoadingLabel || secondaryLabel) : secondaryLabel}</span>
+          </button>
+        </div>
       </div>
     </div>
   )
