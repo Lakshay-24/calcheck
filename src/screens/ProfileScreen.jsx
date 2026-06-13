@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { LogOut } from 'lucide-react'
+import { InstallProfileCard } from '../components/InstallApp'
 import { signOut } from '../services/supabase'
 
 export default function ProfileScreen({ user }) {
@@ -31,6 +32,8 @@ export default function ProfileScreen({ user }) {
           <p className="text-sm text-gray-500">Signed in as</p>
           <p className="text-lg font-semibold text-gray-900 break-all">{user?.email}</p>
         </div>
+
+        <InstallProfileCard />
 
         <div className="bg-gray-50 rounded-2xl p-4 space-y-2">
           <p className="text-sm font-semibold text-gray-700">Account</p>

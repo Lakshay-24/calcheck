@@ -25,7 +25,14 @@ export const storePendingMeal = (result, image) => {
   sessionStorage.setItem(PENDING_MEAL_KEY, JSON.stringify({ result, image }))
 }
 
-export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendingImage = null }) {
+export default function CameraModal({
+  isOpen,
+  onClose,
+  user,
+  onMealSaved,
+  pendingImage = null,
+  onAnalysisComplete
+}) {
   const [stage, setStage] = useState('camera')
   const [capturedImage, setCapturedImage] = useState(null)
   const [analysisResult, setAnalysisResult] = useState(null)
@@ -111,6 +118,7 @@ export default function CameraModal({ isOpen, onClose, user, onMealSaved, pendin
       if (analysisRequestRef.current !== requestId) return
 
       setAnalysisResult(result)
+      onAnalysisComplete?.()
       setStage('results')
     } catch (err) {
       if (analysisRequestRef.current !== requestId) return

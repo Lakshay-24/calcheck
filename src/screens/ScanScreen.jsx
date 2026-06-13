@@ -1,26 +1,51 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Camera, Upload } from 'lucide-react'
+import { Camera, Check, Loader2, Upload, X } from 'lucide-react'
 import CameraModal, { restorePendingMeal } from '../components/CameraModal'
-import { getMealLogsToday, calculateDailyTotals, getUserProfile } from '../services/database'
+import { InstallButton, SmartInstallPrompt } from '../components/InstallApp'
+import {
+  activateMockPro,
+  calculateDailyTotals,
+  getLifetimeScanCount,
+  getMealLogsToday,
+  getUserProfile,
+  incrementScanCount,
+  isUserPro
+} from '../services/database'
 import { signInWithGoogle } from '../services/supabase'
 import { formatLocalTime, formatLocalWeekday, getUserTimezone } from '../utils/timezone'
+import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
+
+const FREE_SCAN_LIMIT = 2
+const POST_LOGIN_SCAN_INTENT_KEY = 'calcheck-post-login-scan-intent'
 
 export default function ScanScreen({ user, resumeSignal = 0 }) {
   const cameraInputRef = useRef(null)
+  const uploadInputRef = useRef(null)
   const loadRequestRef = useRef(0)
   const [meals, setMeals] = useState([])
   const [totals, setTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [goals, setGoals] = useState({ calories: 2500, protein: 150 })
+  const [profile, setProfile] = useState(null)
+  const [lifetimeScans, setLifetimeScans] = useState(0)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [pendingImage, setPendingImage] = useState(null)
   const [loading, setLoading] = useState(false)
   const [saveNotice, setSaveNotice] = useState(null)
   const [recoveryKey, setRecoveryKey] = useState(0)
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [paywallOpen, setPaywallOpen] = useState(false)
+  const [authLoading, setAuthLoading] = useState(false)
+  const [upgradeLoading, setUpgradeLoading] = useState(false)
+  const [scanGateLoading, setScanGateLoading] = useState(false)
+  const [showSmartInstallPrompt, setShowSmartInstallPrompt] = useState(false)
   const timezone = getUserTimezone()
+  const pro = isUserPro(profile)
 
   const loadTodaysMeals = useCallback(async (reason = 'screen-load') => {
     if (!user?.id) {
       setLoading(false)
+      setProfile(null)
+      setLifetimeScans(0)
       return
     }
 
@@ -30,19 +55,22 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     try {
       console.info('[CalCheck] data refresh started', { screen: 'scan', reason })
       setLoading(true)
-      const [mealLogs, profile] = await Promise.all([
+      const [mealLogs, profileResult, scanCount] = await Promise.all([
         getMealLogsToday(user.id, timezone),
-        getUserProfile(user.id).catch(() => null)
+        getUserProfile(user.id).catch(() => null),
+        getLifetimeScanCount(user.id).catch(() => 0)
       ])
 
       if (loadRequestRef.current !== requestId) return
 
       setMeals(mealLogs)
       setTotals(calculateDailyTotals(mealLogs))
-      if (profile) {
+      setProfile(profileResult)
+      setLifetimeScans(scanCount)
+      if (profileResult) {
         setGoals({
-          calories: profile.calorie_target || 2500,
-          protein: profile.protein_target || 150
+          calories: profileResult.calorie_target || 2500,
+          protein: profileResult.protein_target || 150
         })
       }
       console.info('[CalCheck] data refresh completed', { screen: 'scan', reason })
@@ -72,8 +100,21 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       setLoading(false)
       setMeals([])
       setTotals({ calories: 0, protein: 0, carbs: 0, fat: 0 })
+      setProfile(null)
+      setLifetimeScans(0)
     }
   }, [loadTodaysMeals, restorePendingMealAfterLogin, user])
+
+  useEffect(() => {
+    if (!user?.id) return
+
+    const intent = sessionStorage.getItem(POST_LOGIN_SCAN_INTENT_KEY)
+    if (!intent) return
+
+    sessionStorage.removeItem(POST_LOGIN_SCAN_INTENT_KEY)
+    setAuthModalOpen(false)
+    window.setTimeout(() => handleScanRequest(intent), 250)
+  }, [user?.id])
 
   useEffect(() => {
     if (!resumeSignal || !user?.id) return
@@ -115,14 +156,52 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     }
   }
 
-  const handleOpenCamera = () => {
+  const startScanFlow = (source = 'camera') => {
     setPendingImage(null)
+
+    if (source === 'upload') {
+      uploadInputRef.current?.click()
+      return
+    }
+
     if (shouldUseNativeCapture()) {
       cameraInputRef.current?.click()
       return
     }
 
     setCameraOpen(true)
+  }
+
+  const handleScanRequest = async (source = 'camera') => {
+    if (!user?.id) {
+      sessionStorage.setItem(POST_LOGIN_SCAN_INTENT_KEY, source)
+      setAuthModalOpen(true)
+      return
+    }
+
+    try {
+      setScanGateLoading(true)
+      const [latestProfile, latestScanCount] = await Promise.all([
+        getUserProfile(user.id),
+        getLifetimeScanCount(user.id)
+      ])
+
+      setProfile(latestProfile)
+      setLifetimeScans(latestScanCount)
+
+      if (!isUserPro(latestProfile) && latestScanCount >= FREE_SCAN_LIMIT) {
+        setPaywallOpen(true)
+        return
+      }
+
+      startScanFlow(source)
+    } catch (error) {
+      console.error('Failed to check scan access:', error)
+      setSaveNotice('Could not check scan access. Please try again.')
+      setTimeout(() => setSaveNotice(null), 4000)
+    } finally {
+      setScanGateLoading(false)
+    }
   }
 
   const handleImageSelected = (e) => {
@@ -143,6 +222,54 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     setPendingImage(null)
   }
 
+  const handleAnalysisComplete = async () => {
+    if (localStorage.getItem(INSTALL_PROMPT_SEEN_KEY) !== 'true') {
+      localStorage.setItem(INSTALL_PROMPT_SEEN_KEY, 'true')
+      setShowSmartInstallPrompt(true)
+    }
+
+    if (!user?.id || pro) return
+
+    try {
+      await incrementScanCount(user.id)
+      const count = await getLifetimeScanCount(user.id)
+      setLifetimeScans(count)
+    } catch (error) {
+      console.error('Failed to update scan count:', error)
+    }
+  }
+
+  const handleSignIn = async () => {
+    try {
+      setAuthLoading(true)
+      await signInWithGoogle()
+    } catch (error) {
+      console.error('Sign in error:', error)
+      setAuthLoading(false)
+    }
+  }
+
+  const handleUpgrade = async () => {
+    if (!user?.id) {
+      setPaywallOpen(false)
+      setAuthModalOpen(true)
+      return
+    }
+
+    try {
+      setUpgradeLoading(true)
+      const updatedProfile = await activateMockPro(user.id)
+      setProfile(updatedProfile)
+      setPaywallOpen(false)
+      setSaveNotice('CalCheck Pro activated. Unlimited scans unlocked.')
+      setTimeout(() => setSaveNotice(null), 4000)
+    } catch (error) {
+      console.error('Upgrade error:', error)
+    } finally {
+      setUpgradeLoading(false)
+    }
+  }
+
   const caloriePercent = goals.calories ? Math.round((totals.calories / goals.calories) * 100) : 0
   const proteinPercent = goals.protein ? Math.round((totals.protein / goals.protein) * 100) : 0
 
@@ -154,11 +281,31 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         user={user}
         onMealSaved={handleMealSaved}
         pendingImage={pendingImage}
+        onAnalysisComplete={handleAnalysisComplete}
+      />
+
+      <AuthModal
+        isOpen={authModalOpen}
+        isLoading={authLoading}
+        onClose={() => setAuthModalOpen(false)}
+        onSignIn={handleSignIn}
+      />
+
+      <PaywallModal
+        isOpen={paywallOpen}
+        isLoading={upgradeLoading}
+        onClose={() => setPaywallOpen(false)}
+        onUpgrade={handleUpgrade}
       />
 
       <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 z-10">
-        <h1 className="text-2xl font-bold text-gray-900">Scan Food</h1>
-        <p className="text-sm text-gray-500 mt-1">Track your nutrition instantly</p>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold text-gray-900">Scan Food</h1>
+            <p className="text-sm text-gray-500 mt-1">Track your nutrition instantly</p>
+          </div>
+          <InstallButton compact className="shrink-0 mt-0.5" />
+        </div>
       </div>
 
       <div className="px-6 py-6 space-y-6">
@@ -168,13 +315,19 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           </div>
         )}
 
+        <SmartInstallPrompt
+          isOpen={showSmartInstallPrompt}
+          onDismiss={() => setShowSmartInstallPrompt(false)}
+        />
+
         <div className="space-y-3">
           <button
-            onClick={handleOpenCamera}
-            className="w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-brand-900 font-semibold py-4 px-6 rounded-2xl shadow-brand hover:shadow-lg transition-all duration-300 flex items-center justify-center gap-3 active:scale-95"
+            onClick={() => handleScanRequest('camera')}
+            disabled={scanGateLoading}
+            className="w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 disabled:opacity-70 disabled:cursor-not-allowed text-brand-900 font-semibold py-4 px-6 rounded-2xl shadow-brand hover:shadow-lg transition-all duration-300 flex items-center justify-center gap-3 active:scale-95"
           >
-            <Camera size={24} />
-            <span>Open Camera</span>
+            {scanGateLoading ? <Loader2 size={24} className="animate-spin" /> : <Camera size={24} />}
+            <span>{scanGateLoading ? 'Checking access...' : 'Open Camera'}</span>
           </button>
           <input
             ref={cameraInputRef}
@@ -185,17 +338,39 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
             onChange={handleImageSelected}
           />
 
-          <label className="w-full bg-gray-50 hover:bg-gray-100 border-2 border-gray-200 text-gray-900 font-semibold py-4 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-3 cursor-pointer active:scale-95">
+          <button
+            type="button"
+            onClick={() => handleScanRequest('upload')}
+            disabled={scanGateLoading}
+            className="w-full bg-gray-50 hover:bg-gray-100 border-2 border-gray-200 disabled:opacity-70 disabled:cursor-not-allowed text-gray-900 font-semibold py-4 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-3 active:scale-95"
+          >
             <Upload size={24} />
             <span>Upload Image</span>
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleImageSelected}
-            />
-          </label>
+          </button>
+          <input
+            ref={uploadInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleImageSelected}
+          />
         </div>
+
+        {user && !pro && (
+          <div className="bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Free scans</p>
+              <p className="text-xs text-gray-500">{Math.min(lifetimeScans, FREE_SCAN_LIMIT)} of {FREE_SCAN_LIMIT} used</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPaywallOpen(true)}
+              className="text-sm font-semibold text-brand-900 bg-brand-50 border border-brand-300/60 rounded-xl px-3 py-2"
+            >
+              Go Pro
+            </button>
+          </div>
+        )}
 
         <div className="bg-gradient-to-br from-brand-50 to-transparent border border-brand-300/50 rounded-3xl p-6 space-y-6">
           <div className="flex items-center justify-between">
@@ -217,14 +392,13 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
    
     <button
-  onClick={signInWithGoogle}
-  className="w-full bg-white border border-gray-300 hover:bg-gray-50 rounded-xl py-3 font-medium flex items-center justify-center gap-2"
+  onClick={handleSignIn}
+  disabled={authLoading}
+  className="w-full bg-white border border-gray-300 hover:bg-gray-50 disabled:bg-gray-100 disabled:cursor-not-allowed rounded-xl py-3 font-medium flex items-center justify-center gap-2"
 >
-  <svg width="18" height="18" viewBox="0 0 48 48">
-    <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12S17.4 12 24 12c3 0 5.7 1.1 7.8 3l5.7-5.7C34.1 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z"/>
-  </svg>
+  {authLoading ? <Loader2 size={18} className="animate-spin" /> : <GoogleGlyph />}
 
-  Continue with Google
+  {authLoading ? 'Signing in...' : 'Continue with Google'}
 </button>
 
 
@@ -333,4 +507,117 @@ const shouldUseNativeCapture = () => {
   if (typeof navigator === 'undefined') return false
 
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+}
+
+function AuthModal({ isOpen, isLoading, onClose, onSignIn }) {
+  if (!isOpen) return null
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center sm:justify-center px-0 sm:px-4">
+      <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-6 relative">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={isLoading}
+          className="absolute top-4 right-4 p-2 rounded-full hover:bg-gray-100 disabled:opacity-50"
+          aria-label="Close"
+        >
+          <X size={20} className="text-gray-700" />
+        </button>
+
+        <div className="pr-8">
+          <h2 className="text-2xl font-bold text-gray-900">Track calories with calcheck</h2>
+          <div className="mt-5 space-y-3">
+            {['2 free AI scans', 'Save meal history', 'Track progress'].map((benefit) => (
+              <div key={benefit} className="flex items-center gap-3 text-gray-700">
+                <Check size={18} className="text-brand-700" />
+                <span className="font-medium">{benefit}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onSignIn}
+          disabled={isLoading}
+          className="mt-8 w-full bg-white border border-gray-300 hover:bg-gray-50 disabled:bg-gray-100 disabled:cursor-not-allowed rounded-xl py-3 font-semibold flex items-center justify-center gap-3 text-gray-900"
+        >
+          {isLoading ? <Loader2 size={20} className="animate-spin" /> : <GoogleGlyph />}
+          <span>{isLoading ? 'Signing in...' : 'Continue with Google'}</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function PaywallModal({ isOpen, isLoading, onClose, onUpgrade }) {
+  if (!isOpen) return null
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center sm:justify-center px-0 sm:px-4">
+      <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-6 relative">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={isLoading}
+          className="absolute top-4 right-4 p-2 rounded-full hover:bg-gray-100 disabled:opacity-50"
+          aria-label="Close"
+        >
+          <X size={20} className="text-gray-700" />
+        </button>
+
+        <div className="pr-8">
+          <h2 className="text-2xl font-bold text-gray-900">You've used your free scans</h2>
+          <p className="text-gray-600 mt-3">
+            Upgrade to CalCheck Pro for unlimited AI calorie scans.
+          </p>
+
+          <div className="mt-5 space-y-3">
+            {['Unlimited scans', 'Meal history', 'Progress tracking'].map((benefit) => (
+              <div key={benefit} className="flex items-center gap-3 text-gray-700">
+                <Check size={18} className="text-brand-700" />
+                <span className="font-medium">{benefit}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-6 rounded-2xl bg-brand-50 border border-brand-300/60 p-4">
+            <p className="text-sm text-gray-600">CalCheck Pro</p>
+            <p className="text-3xl font-bold text-gray-900 mt-1">₹69/month</p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onUpgrade}
+          disabled={isLoading}
+          className="mt-6 w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 disabled:opacity-70 disabled:cursor-not-allowed text-brand-900 rounded-xl py-3 font-bold flex items-center justify-center gap-2"
+        >
+          {isLoading && <Loader2 size={20} className="animate-spin" />}
+          <span>{isLoading ? 'Activating Pro...' : 'Upgrade to Pro'}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={isLoading}
+          className="mt-3 w-full text-gray-600 hover:text-gray-900 disabled:opacity-50 rounded-xl py-3 font-semibold"
+        >
+          Maybe Later
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function GoogleGlyph() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12S17.4 12 24 12c3 0 5.7 1.1 7.8 3l5.7-5.7C34.1 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z" />
+      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.1 18.9 12 24 12c3 0 5.7 1.1 7.8 3l5.7-5.7C34.1 6.1 29.3 4 24 4 16.2 4 9.5 8.4 6.3 14.7z" />
+      <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.4 39.5 16.1 44 24 44z" />
+      <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.2-4.1 5.6l6.2 5.2C40.9 35.5 44 30.7 44 24c0-1.3-.1-2.3-.4-3.5z" />
+    </svg>
+  )
 }

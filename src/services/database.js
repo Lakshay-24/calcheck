@@ -191,6 +191,7 @@ export const getOrCreateUserProfile = async (userId, email) => {
       calorie_target: 2500,
       protein_target: 150,
       subscription_status: 'free',
+      is_pro: false,
       scans_used_today: 0,
       timezone,
       timezone_updated_at: new Date().toISOString()
@@ -242,31 +243,41 @@ export const getUserProfile = async (userId) => {
   return data
 }
 
+export const isUserPro = (profile) => {
+  return Boolean(profile?.is_pro || profile?.subscription_status === 'pro')
+}
+
 // Increment daily scan counter
 export const incrementScanCount = async (userId) => {
   const today = getLocalDate(new Date(), getUserTimezone())
 
-  const { data: existing } = await supabase
+  const { data: existing, error: lookupError } = await supabase
     .from('scan_counters')
     .select('*')
     .eq('user_id', userId)
     .eq('date', today)
-    .single()
+    .maybeSingle()
+
+  if (lookupError) throw lookupError
 
   if (existing) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('scan_counters')
       .update({ scan_count: existing.scan_count + 1 })
       .eq('id', existing.id)
       .select()
       .single()
+
+    if (error) throw error
     return data
   } else {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('scan_counters')
       .insert({ user_id: userId, date: today, scan_count: 1 })
       .select()
       .single()
+
+    if (error) throw error
     return data
   }
 }
@@ -283,4 +294,22 @@ export const getScanCountToday = async (userId) => {
     .single()
 
   return data?.scan_count || 0
+}
+
+export const getLifetimeScanCount = async (userId) => {
+  const { data, error } = await supabase
+    .from('scan_counters')
+    .select('scan_count')
+    .eq('user_id', userId)
+
+  if (error) throw error
+
+  return (data || []).reduce((total, row) => total + (row.scan_count || 0), 0)
+}
+
+export const activateMockPro = async (userId) => {
+  return updateUserProfile(userId, {
+    is_pro: true,
+    subscription_status: 'pro'
+  })
 }
