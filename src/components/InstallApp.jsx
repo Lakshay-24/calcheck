@@ -15,7 +15,7 @@ export function InstallButton({ compact = false, className = '' }) {
         className={`bg-gradient-to-r from-brand-300 via-brand-400 to-brand-500 text-white font-semibold rounded-full shadow-[0_10px_24px_rgba(17,245,246,0.24)] flex items-center justify-center gap-2 active:scale-95 ${compact ? 'px-3 py-2 text-sm' : 'px-4 py-2.5 text-sm'} ${className}`}
       >
         <Smartphone size={compact ? 16 : 18} className="text-white" />
-        <span>Install</span>
+        <span>Install App</span>
       </button>
       <InstallSheet {...install.sheetProps} />
     </>
@@ -86,7 +86,7 @@ export function SmartInstallPrompt({ isOpen, onDismiss }) {
               onClick={handleInstall}
               className="bg-brand-900 text-white text-sm font-semibold rounded-full px-4 py-2"
             >
-              Install
+              Install App
             </button>
             <button
               type="button"
@@ -224,7 +224,7 @@ function FallbackSteps({ platform }) {
       <InstallStep
         number="2"
         icon={<Smartphone size={24} className="text-brand-900" />}
-        text='Choose "Install app" or "Add to Home screen"'
+        text='Choose "Install App" or "Add to Home Screen"'
       />
       <InstallStep
         number="3"

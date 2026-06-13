@@ -9,8 +9,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icon-192.png', 'icon-512.png', 'logo.png', 'robots.txt'],
       manifest: {
-        name: 'calcheck - Food Calorie Tracker',
-        short_name: 'calcheck',
+        name: 'CalCheck AI Calorie Tracker',
+        short_name: 'CalCheck AI',
         description: 'Snap food. Track calories & protein.',
         theme_color: '#11F5F6',
         background_color: '#FFFFFF',

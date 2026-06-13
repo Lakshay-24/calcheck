@@ -244,7 +244,7 @@ export const getUserProfile = async (userId) => {
 }
 
 export const isUserPro = (profile) => {
-  return Boolean(profile?.is_pro || profile?.subscription_status === 'pro')
+  return Boolean(profile?.is_pro)
 }
 
 // Increment daily scan counter
@@ -305,11 +305,4 @@ export const getLifetimeScanCount = async (userId) => {
   if (error) throw error
 
   return (data || []).reduce((total, row) => total + (row.scan_count || 0), 0)
-}
-
-export const activateMockPro = async (userId) => {
-  return updateUserProfile(userId, {
-    is_pro: true,
-    subscription_status: 'pro'
-  })
 }

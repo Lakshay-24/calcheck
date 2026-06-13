@@ -3,7 +3,6 @@ import { Camera, Check, Loader2, Upload, X } from 'lucide-react'
 import CameraModal, { restorePendingMeal } from '../components/CameraModal'
 import { InstallButton, SmartInstallPrompt } from '../components/InstallApp'
 import {
-  activateMockPro,
   calculateDailyTotals,
   getLifetimeScanCount,
   getMealLogsToday,
@@ -11,6 +10,11 @@ import {
   incrementScanCount,
   isUserPro
 } from '../services/database'
+import {
+  createSubscription,
+  openRazorpaySubscriptionCheckout,
+  syncSubscription
+} from '../services/subscriptions'
 import { signInWithGoogle } from '../services/supabase'
 import { formatLocalTime, formatLocalWeekday, getUserTimezone } from '../utils/timezone'
 import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
@@ -38,6 +42,9 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const [upgradeLoading, setUpgradeLoading] = useState(false)
   const [scanGateLoading, setScanGateLoading] = useState(false)
   const [showSmartInstallPrompt, setShowSmartInstallPrompt] = useState(false)
+  const [pendingPaywallScanSource, setPendingPaywallScanSource] = useState(null)
+  const [proSuccessVisible, setProSuccessVisible] = useState(false)
+  const [upgradeError, setUpgradeError] = useState(null)
   const timezone = getUserTimezone()
   const pro = isUserPro(profile)
 
@@ -181,15 +188,22 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
     try {
       setScanGateLoading(true)
-      const [latestProfile, latestScanCount] = await Promise.all([
+      let [latestProfile, latestScanCount] = await Promise.all([
         getUserProfile(user.id),
         getLifetimeScanCount(user.id)
       ])
+
+      if (shouldRepairSubscriptionBeforeScan(latestProfile)) {
+        const syncResult = await syncSubscription().catch(() => null)
+        latestProfile = syncResult?.profile || latestProfile
+      }
 
       setProfile(latestProfile)
       setLifetimeScans(latestScanCount)
 
       if (!isUserPro(latestProfile) && latestScanCount >= FREE_SCAN_LIMIT) {
+        setPendingPaywallScanSource(source)
+        setUpgradeError(null)
         setPaywallOpen(true)
         return
       }
@@ -256,18 +270,74 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       return
     }
 
+    const previousProfile = profile
+
     try {
       setUpgradeLoading(true)
-      const updatedProfile = await activateMockPro(user.id)
-      setProfile(updatedProfile)
-      setPaywallOpen(false)
-      setSaveNotice('CalCheck Pro activated. Unlimited scans unlocked.')
-      setTimeout(() => setSaveNotice(null), 4000)
+      setUpgradeError(null)
+      const checkoutPayload = await createSubscription()
+
+      if (checkoutPayload?.already_pro) {
+        setProfile(checkoutPayload.profile)
+        setPaywallOpen(false)
+        setProSuccessVisible(true)
+        setTimeout(() => setProSuccessVisible(false), 5000)
+        continuePendingScan()
+        return
+      }
+
+      await openRazorpaySubscriptionCheckout({
+        keyId: checkoutPayload.key_id,
+        subscriptionId: checkoutPayload.subscription_id,
+        user,
+        onAuthorized: async () => {
+          setUpgradeError(null)
+          setUpgradeLoading(true)
+
+          try {
+            const synced = await waitForProConfirmation()
+            setProfile(synced)
+            setPaywallOpen(false)
+            setProSuccessVisible(true)
+            setTimeout(() => setProSuccessVisible(false), 5000)
+            continuePendingScan()
+          } catch (error) {
+            setUpgradeError(error?.message || 'Payment authorized. Waiting for subscription confirmation.')
+          } finally {
+            setUpgradeLoading(false)
+          }
+        },
+        onDismiss: () => {
+          setUpgradeLoading(false)
+        }
+      })
     } catch (error) {
       console.error('Upgrade error:', error)
+      setProfile(previousProfile)
+      setUpgradeError(error?.message || 'Could not activate Pro. Please try again.')
     } finally {
       setUpgradeLoading(false)
     }
+  }
+
+  const waitForProConfirmation = async () => {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const syncResult = await syncSubscription().catch(() => null)
+      const latestProfile = syncResult?.profile || await getUserProfile(user.id).catch(() => null)
+
+      if (latestProfile?.is_pro) return latestProfile
+      await new Promise((resolve) => window.setTimeout(resolve, 1500))
+    }
+
+    throw new Error('Payment authorized. Pro access will unlock after Razorpay confirms the subscription.')
+  }
+
+  const continuePendingScan = () => {
+    if (!pendingPaywallScanSource) return
+
+    const scanSource = pendingPaywallScanSource
+    setPendingPaywallScanSource(null)
+    window.setTimeout(() => startScanFlow(scanSource), 350)
   }
 
   const caloriePercent = goals.calories ? Math.round((totals.calories / goals.calories) * 100) : 0
@@ -294,6 +364,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       <PaywallModal
         isOpen={paywallOpen}
         isLoading={upgradeLoading}
+        error={upgradeError}
         onClose={() => setPaywallOpen(false)}
         onUpgrade={handleUpgrade}
       />
@@ -312,6 +383,13 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         {saveNotice && (
           <div className="bg-brand-50 border border-brand-300/60 rounded-xl p-3 text-sm text-brand-700">
             {saveNotice}
+          </div>
+        )}
+
+        {proSuccessVisible && (
+          <div className="bg-gradient-to-r from-brand-50 to-white border border-brand-300/70 rounded-2xl p-4 shadow-[0_14px_34px_rgba(17,245,246,0.12)]">
+            <p className="text-base font-bold text-gray-900">🎉 Welcome to CalCheck Pro</p>
+            <p className="text-sm text-gray-600 mt-1">Unlimited scans unlocked.</p>
           </div>
         )}
 
@@ -509,6 +587,13 @@ const shouldUseNativeCapture = () => {
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 }
 
+const shouldRepairSubscriptionBeforeScan = (profile) => {
+  return Boolean(
+    profile?.razorpay_subscription_id &&
+    ['pending', 'grace', 'halted', 'cancelled'].includes(profile?.subscription_status)
+  )
+}
+
 function AuthModal({ isOpen, isLoading, onClose, onSignIn }) {
   if (!isOpen) return null
 
@@ -551,7 +636,7 @@ function AuthModal({ isOpen, isLoading, onClose, onSignIn }) {
   )
 }
 
-function PaywallModal({ isOpen, isLoading, onClose, onUpgrade }) {
+function PaywallModal({ isOpen, isLoading, error, onClose, onUpgrade }) {
   if (!isOpen) return null
 
   return (
@@ -586,6 +671,12 @@ function PaywallModal({ isOpen, isLoading, onClose, onUpgrade }) {
             <p className="text-sm text-gray-600">CalCheck Pro</p>
             <p className="text-3xl font-bold text-gray-900 mt-1">₹69/month</p>
           </div>
+
+          {error && (
+            <div className="mt-4 rounded-2xl bg-red-50 border border-red-200 p-3">
+              <p className="text-sm font-semibold text-red-800">{error}</p>
+            </div>
+          )}
         </div>
 
         <button
@@ -595,7 +686,7 @@ function PaywallModal({ isOpen, isLoading, onClose, onUpgrade }) {
           className="mt-6 w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 disabled:opacity-70 disabled:cursor-not-allowed text-brand-900 rounded-xl py-3 font-bold flex items-center justify-center gap-2"
         >
           {isLoading && <Loader2 size={20} className="animate-spin" />}
-          <span>{isLoading ? 'Activating Pro...' : 'Upgrade to Pro'}</span>
+          <span>{isLoading ? 'Opening Razorpay...' : 'Upgrade to Pro'}</span>
         </button>
 
         <button

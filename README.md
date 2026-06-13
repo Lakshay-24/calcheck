@@ -207,3 +207,52 @@ Private - All rights reserved
 ---
 
 **calcheck:** Snap food. Track progress.
+
+## Razorpay Recurring Subscriptions
+
+CalCheck Pro uses Razorpay recurring subscriptions:
+
+- India: INR 69/month using plan `plan_T0xf4EGXgLZ24b`
+- International: USD 1.99/month using plan `plan_T0xfxE81gmOfCY`
+- Failed renewals enter a 4-day grace period before Pro access expires.
+
+Frontend environment:
+
+```bash
+VITE_RAZORPAY_KEY_ID=your_razorpay_key_id
+```
+
+Supabase Edge Function secrets:
+
+```bash
+supabase secrets set RAZORPAY_KEY_ID=your_razorpay_key_id
+supabase secrets set RAZORPAY_KEY_SECRET=your_razorpay_key_secret
+supabase secrets set RAZORPAY_WEBHOOK_SECRET=your_razorpay_webhook_secret
+supabase secrets set RAZORPAY_PLAN_ID_INR_MONTHLY=plan_T0xf4EGXgLZ24b
+supabase secrets set RAZORPAY_PLAN_ID_USD_MONTHLY=plan_T0xfxE81gmOfCY
+supabase secrets set SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+```
+
+Deploy subscription functions:
+
+```bash
+supabase functions deploy create-subscription
+supabase functions deploy razorpay-webhook
+supabase functions deploy cancel-subscription
+supabase functions deploy sync-subscription
+```
+
+Configure the Razorpay webhook URL:
+
+```text
+https://<project-ref>.functions.supabase.co/razorpay-webhook
+```
+
+Webhook events to enable:
+
+- `subscription.activated`
+- `subscription.charged`
+- `subscription.pending`
+- `subscription.halted`
+- `subscription.cancelled`
+- `subscription.completed`

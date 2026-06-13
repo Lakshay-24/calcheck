@@ -1,10 +1,31 @@
-import React, { useState } from 'react'
-import { LogOut } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { Check, Loader2, LogOut } from 'lucide-react'
 import { InstallProfileCard } from '../components/InstallApp'
+import { getUserProfile, isUserPro } from '../services/database'
+import {
+  cancelSubscription,
+  createSubscription,
+  openRazorpaySubscriptionCheckout,
+  syncSubscription
+} from '../services/subscriptions'
 import { signOut } from '../services/supabase'
 
 export default function ProfileScreen({ user }) {
   const [signingOut, setSigningOut] = useState(false)
+  const [profile, setProfile] = useState(null)
+  const [subscriptionLoading, setSubscriptionLoading] = useState(false)
+  const [subscriptionError, setSubscriptionError] = useState(null)
+  const [subscriptionNotice, setSubscriptionNotice] = useState(null)
+
+  useEffect(() => {
+    if (!user?.id) return
+
+    getUserProfile(user.id)
+      .then(setProfile)
+      .catch((error) => {
+        console.error('Profile subscription load error:', error)
+      })
+  }, [user?.id])
 
   const handleSignOut = async () => {
     try {
@@ -14,6 +35,77 @@ export default function ProfileScreen({ user }) {
       console.error('Sign out error:', error)
     } finally {
       setSigningOut(false)
+    }
+  }
+
+  const handleSubscribe = async () => {
+    if (!user?.id) return
+
+    try {
+      setSubscriptionLoading(true)
+      setSubscriptionError(null)
+      setSubscriptionNotice(null)
+
+      const checkoutPayload = await createSubscription()
+      if (checkoutPayload?.already_pro) {
+        setProfile(checkoutPayload.profile)
+        setSubscriptionNotice('CalCheck Pro is active.')
+        return
+      }
+
+      await openRazorpaySubscriptionCheckout({
+        keyId: checkoutPayload.key_id,
+        subscriptionId: checkoutPayload.subscription_id,
+        user,
+        onAuthorized: async () => {
+          setSubscriptionLoading(true)
+          setSubscriptionNotice('Payment authorized. Confirming subscription...')
+
+          try {
+            const confirmedProfile = await waitForProConfirmation(user.id)
+            setProfile(confirmedProfile)
+            setSubscriptionNotice('CalCheck Pro is active.')
+          } catch (error) {
+            setSubscriptionError(error?.message || 'Subscription confirmation is still pending.')
+          } finally {
+            setSubscriptionLoading(false)
+          }
+        },
+        onDismiss: () => setSubscriptionLoading(false)
+      })
+    } catch (error) {
+      console.error('Subscription checkout error:', error)
+      setSubscriptionError(error?.message || 'Could not start subscription.')
+    } finally {
+      setSubscriptionLoading(false)
+    }
+  }
+
+  const handleManageSubscription = async () => {
+    try {
+      setSubscriptionLoading(true)
+      setSubscriptionError(null)
+      const result = await syncSubscription()
+      if (result?.profile) setProfile(result.profile)
+      setSubscriptionNotice('Subscription status refreshed.')
+    } catch (error) {
+      setSubscriptionError(error?.message || 'Could not refresh subscription.')
+    } finally {
+      setSubscriptionLoading(false)
+    }
+  }
+
+  const handleCancelSubscription = async () => {
+    try {
+      setSubscriptionLoading(true)
+      setSubscriptionError(null)
+      const result = await cancelSubscription()
+      if (result?.profile) setProfile(result.profile)
+      setSubscriptionNotice('Subscription will cancel at the end of the billing period.')
+    } catch (error) {
+      setSubscriptionError(error?.message || 'Could not cancel subscription.')
+    } finally {
+      setSubscriptionLoading(false)
     }
   }
 
@@ -35,6 +127,16 @@ export default function ProfileScreen({ user }) {
 
         <InstallProfileCard />
 
+        <SubscriptionCard
+          profile={profile}
+          loading={subscriptionLoading}
+          error={subscriptionError}
+          notice={subscriptionNotice}
+          onSubscribe={handleSubscribe}
+          onManage={handleManageSubscription}
+          onCancel={handleCancelSubscription}
+        />
+
         <div className="bg-gray-50 rounded-2xl p-4 space-y-2">
           <p className="text-sm font-semibold text-gray-700">Account</p>
           <p className="text-sm text-gray-500">
@@ -53,4 +155,128 @@ export default function ProfileScreen({ user }) {
       </div>
     </div>
   )
+}
+
+async function waitForProConfirmation(userId) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const syncResult = await syncSubscription().catch(() => null)
+    const latestProfile = syncResult?.profile || await getUserProfile(userId).catch(() => null)
+
+    if (latestProfile?.is_pro) return latestProfile
+    await new Promise((resolve) => window.setTimeout(resolve, 1500))
+  }
+
+  throw new Error('Payment authorized. Pro access will unlock after Razorpay confirms the subscription.')
+}
+
+function SubscriptionCard({ profile, loading, error, notice, onSubscribe, onManage, onCancel }) {
+  const pro = isUserPro(profile)
+  const status = profile?.subscription_status || 'free'
+  const renewalDate = formatDate(profile?.current_period_end)
+  const billingAmount = formatBillingAmount(profile)
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-[0_14px_34px_rgba(16,42,42,0.05)]">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-gray-500">Current Plan</p>
+          <h2 className="text-2xl font-bold text-gray-900 mt-1">
+            {pro ? 'CalCheck Pro' : 'Free'}
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            {pro ? 'Unlimited AI calorie scans' : '2 Free Scans'}
+          </p>
+        </div>
+
+        {pro && (
+          <div className="w-10 h-10 rounded-full bg-brand-50 border border-brand-300/70 flex items-center justify-center">
+            <Check size={20} className="text-brand-700" />
+          </div>
+        )}
+      </div>
+
+      <div className="mt-5 space-y-3 text-sm">
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-gray-500">Status</span>
+          <span className="font-semibold text-gray-900 capitalize">{status}</span>
+        </div>
+
+        {pro && (
+          <>
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-gray-500">Renewal Date</span>
+              <span className="font-semibold text-gray-900">{renewalDate || 'Pending'}</span>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-gray-500">Billing Amount</span>
+              <span className="font-semibold text-gray-900">{billingAmount}</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {notice && (
+        <div className="mt-4 rounded-xl bg-brand-50 border border-brand-300/60 p-3 text-sm font-semibold text-brand-700">
+          {notice}
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-4 rounded-xl bg-red-50 border border-red-200 p-3 text-sm font-semibold text-red-800">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-5 space-y-3">
+        {!pro ? (
+          <button
+            type="button"
+            onClick={onSubscribe}
+            disabled={loading}
+            className="w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 disabled:opacity-70 disabled:cursor-not-allowed text-brand-900 font-bold py-3 px-5 rounded-2xl flex items-center justify-center gap-2 shadow-brand"
+          >
+            {loading && <Loader2 size={18} className="animate-spin" />}
+            <span>{loading ? 'Opening Razorpay...' : 'Upgrade to Pro'}</span>
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={onManage}
+              disabled={loading}
+              className="w-full bg-gray-100 hover:bg-gray-200 disabled:opacity-70 text-gray-900 font-semibold py-3 px-5 rounded-2xl flex items-center justify-center gap-2"
+            >
+              {loading && <Loader2 size={18} className="animate-spin" />}
+              <span>Manage Subscription</span>
+            </button>
+            {!profile?.subscription_cancel_at_period_end && (
+              <button
+                type="button"
+                onClick={onCancel}
+                disabled={loading}
+                className="w-full text-gray-600 hover:text-gray-900 disabled:opacity-70 font-semibold py-3 px-5 rounded-2xl"
+              >
+                Cancel Subscription
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function formatDate(value) {
+  if (!value) return ''
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  }).format(new Date(value))
+}
+
+function formatBillingAmount(profile) {
+  if (profile?.subscription_currency === 'USD') return '$1.99/month'
+  return '₹69/month'
 }
