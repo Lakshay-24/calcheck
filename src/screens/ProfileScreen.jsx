@@ -223,6 +223,8 @@ export default function ProfileScreen({ user }) {
 
 function DiagnosticsPanel({ diagnostics }) {
   const recentRequests = diagnostics.requests || []
+  const startupSteps = diagnostics.startup || []
+  const lifecycleEvents = diagnostics.lifecycle || []
   const lastFailed = diagnostics.lastFailedRequest
   const lastImage = diagnostics.lastImage
 
@@ -236,6 +238,29 @@ function DiagnosticsPanel({ diagnostics }) {
         <p className="text-xs text-gray-400 mt-1 break-all">
           Build: {formatDiagnosticDate(diagnostics.buildTimestamp)}
         </p>
+      </div>
+
+      <div>
+        <p className="text-xs font-semibold uppercase text-gray-400">Startup report</p>
+        <div className="mt-2 space-y-2">
+          {startupSteps.length === 0 ? (
+            <p className="text-xs text-gray-500">No startup timings logged yet.</p>
+          ) : (
+            startupSteps.slice(0, 8).map((step) => (
+              <div key={`${step.name}-${step.timestamp}`} className="rounded-xl bg-white/5 p-3 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-semibold text-gray-100">{step.name}</span>
+                  <span className={step.success ? 'text-brand-300' : 'text-red-300'}>
+                    {step.timedOut ? 'timeout' : step.success ? 'success' : 'failed'}
+                  </span>
+                </div>
+                <p className="mt-1 text-gray-400">
+                  {step.durationMs}ms - blocks render: {step.blocksRender ? 'yes' : 'no'}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       <div>
@@ -254,6 +279,29 @@ function DiagnosticsPanel({ diagnostics }) {
                 </div>
                 <p className="mt-1 text-gray-400">
                   {request.durationMs}ms - {formatDiagnosticDate(request.endTime)}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div>
+        <p className="text-xs font-semibold uppercase text-gray-400">Lifecycle report</p>
+        <div className="mt-2 space-y-2">
+          {lifecycleEvents.length === 0 ? (
+            <p className="text-xs text-gray-500">No lifecycle events logged yet.</p>
+          ) : (
+            lifecycleEvents.slice(0, 8).map((event) => (
+              <div key={`${event.name}-${event.timestamp}`} className="rounded-xl bg-white/5 p-3 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-semibold text-gray-100">{event.name}</span>
+                  <span className="text-gray-400">{formatDiagnosticDate(event.timestamp)}</span>
+                </div>
+                <p className="mt-1 text-gray-400">
+                  pending: {event.pendingRequests?.length || 0}
+                  {event.source ? ` - source: ${event.source}` : ''}
+                  {event.state ? ` - state: ${event.state}` : ''}
                 </p>
               </div>
             ))

@@ -1,14 +1,19 @@
 const DIAGNOSTICS_KEY = 'calcheck-diagnostics'
 const LONG_REQUEST_MS = 15000
 const MAX_REQUESTS = 12
+const MAX_STARTUP_STEPS = 20
+const MAX_LIFECYCLE_EVENTS = 30
 const inFlightRequests = new Map()
+const inFlightRequestMeta = new Map()
 
 const emptyDiagnostics = {
   requests: [],
   lastFailedRequest: null,
   lastError: null,
   lastImage: null,
-  performance: []
+  performance: [],
+  startup: [],
+  lifecycle: []
 }
 
 const safeNow = () => {
@@ -104,15 +109,125 @@ export const recordPerformanceMetric = (name, details = {}) => {
   console.info('[CalCheck] performance metric', entry)
 }
 
+export const recordStartupStep = (entry) => {
+  const current = readDiagnostics()
+  const nextEntry = {
+    ...entry,
+    timestamp: entry.timestamp || new Date().toISOString()
+  }
+
+  writeDiagnostics({
+    ...current,
+    startup: [nextEntry, ...(current.startup || [])].slice(0, MAX_STARTUP_STEPS)
+  })
+
+  console.info('[CalCheck] startup step', nextEntry)
+}
+
+export const getPendingRequestsSnapshot = () =>
+  Array.from(inFlightRequestMeta.values()).map((entry) => ({
+    ...entry,
+    ageMs: Math.max(0, Math.round(safeNow() - entry.startMs)),
+    startMs: undefined
+  }))
+
+export const recordLifecycleEvent = (name, details = {}) => {
+  const current = readDiagnostics()
+  const entry = {
+    name,
+    ...details,
+    pendingRequests: getPendingRequestsSnapshot(),
+    timestamp: new Date().toISOString()
+  }
+
+  writeDiagnostics({
+    ...current,
+    lifecycle: [entry, ...(current.lifecycle || [])].slice(0, MAX_LIFECYCLE_EVENTS)
+  })
+
+  console.info('[CalCheck] lifecycle event', entry)
+}
+
+export const trackStartupStep = async (
+  name,
+  taskFactory,
+  {
+    blocksRender = false,
+    timeoutMs = 5000,
+    fallbackValue = null
+  } = {}
+) => {
+  const startMs = safeNow()
+  const startTime = new Date().toISOString()
+  let timeoutId
+  let timedOut = false
+
+  try {
+    const taskPromise = Promise.resolve().then(taskFactory)
+    const guardedTaskPromise = taskPromise.catch((error) => {
+      if (timedOut) {
+        console.warn('[CalCheck] startup task rejected after timeout', { name, error })
+        return fallbackValue
+      }
+
+      throw error
+    })
+    const timeoutPromise = new Promise((resolve) => {
+      timeoutId = window.setTimeout(() => {
+        timedOut = true
+        resolve(fallbackValue)
+      }, timeoutMs)
+    })
+
+    const result = await Promise.race([guardedTaskPromise, timeoutPromise])
+    const endTime = new Date().toISOString()
+    const durationMs = Math.round(safeNow() - startMs)
+
+    recordStartupStep({
+      name,
+      startTime,
+      endTime,
+      durationMs,
+      success: !timedOut,
+      timedOut,
+      blocksRender,
+      timeoutMs
+    })
+
+    return result
+  } catch (error) {
+    const endTime = new Date().toISOString()
+    const durationMs = Math.round(safeNow() - startMs)
+
+    recordStartupStep({
+      name,
+      startTime,
+      endTime,
+      durationMs,
+      success: false,
+      timedOut,
+      blocksRender,
+      timeoutMs,
+      error: serializeError(error)
+    })
+
+    throw error
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId)
+  }
+}
+
 export const trackApiRequest = async (requestName, requestFactory, options = {}) => {
   const dedupeKey = options.dedupeKey || null
   if (dedupeKey && inFlightRequests.has(dedupeKey)) {
     console.info('[CalCheck] API request deduped', { requestName, dedupeKey })
+    recordLifecycleEvent('duplicate request deduped', { requestName, dedupeKey })
     return inFlightRequests.get(dedupeKey)
   }
 
   const startMs = safeNow()
   const startTime = new Date().toISOString()
+  const requestKey = dedupeKey || `${requestName}:${startTime}:${Math.random().toString(36).slice(2, 8)}`
   let longRequestTimer
   let longRequestLogged = false
 
@@ -130,6 +245,12 @@ export const trackApiRequest = async (requestName, requestFactory, options = {})
   }
 
   console.info('[CalCheck] API request started', { requestName, startTime })
+  inFlightRequestMeta.set(requestKey, {
+    requestName,
+    dedupeKey,
+    startTime,
+    startMs
+  })
 
   const requestPromise = (async () => {
     const result = await requestFactory()
@@ -211,6 +332,7 @@ export const trackApiRequest = async (requestName, requestFactory, options = {})
   } finally {
     if (longRequestTimer) window.clearTimeout(longRequestTimer)
     if (dedupeKey) inFlightRequests.delete(dedupeKey)
+    inFlightRequestMeta.delete(requestKey)
   }
 }
 

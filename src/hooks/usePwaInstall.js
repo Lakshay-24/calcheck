@@ -28,6 +28,12 @@ const getServerSnapshot = () => ({
     isIos: false,
     isAndroid: false,
     isSafari: false,
+    isChrome: false,
+    isEdge: false,
+    isInstagramBrowser: false,
+    isFacebookBrowser: false,
+    isMessengerBrowser: false,
+    isMetaInAppBrowser: false,
     isEmbeddedBrowser: false
   }
 })
@@ -102,16 +108,28 @@ function getPlatformInfo() {
   const isCriOS = /CriOS/i.test(userAgent)
   const isFxiOS = /FxiOS/i.test(userAgent)
   const isEdgiOS = /EdgiOS/i.test(userAgent)
+  const isChrome = (/Chrome|CriOS/i.test(userAgent) && !/Edg|EdgiOS|OPR|SamsungBrowser/i.test(userAgent)) || /Chrome/i.test(vendor)
+  const isEdge = /Edg|EdgiOS/i.test(userAgent)
   const isSafari = isIos && /Safari/i.test(userAgent) && /Apple/i.test(vendor) && !isCriOS && !isFxiOS && !isEdgiOS
-  const isEmbeddedBrowser = isIos && (
-    /Instagram|FBAN|FBAV|FB_IAB|GSA|Line|Twitter|LinkedInApp|WhatsApp/i.test(userAgent) ||
+  const isInstagramBrowser = /Instagram/i.test(userAgent)
+  const isFacebookBrowser = /FBAN|FBAV|FB_IAB|FBIOS|FB4A|FB_IAB\/FB4A/i.test(userAgent)
+  const isMessengerBrowser = /Messenger|FB_IAB\/Messenger|FBAN\/Messenger|FBAN\/Orca|FBAV\/Orca/i.test(userAgent)
+  const isMetaInAppBrowser = isInstagramBrowser || isFacebookBrowser || isMessengerBrowser
+  const isEmbeddedBrowser = isMetaInAppBrowser || (isIos && (
+    /GSA|Line|Twitter|LinkedInApp|WhatsApp/i.test(userAgent) ||
     (!isSafari && !isCriOS && !isFxiOS && !isEdgiOS)
-  )
+  ))
 
   return {
     isIos,
     isAndroid,
     isSafari,
+    isChrome,
+    isEdge,
+    isInstagramBrowser,
+    isFacebookBrowser,
+    isMessengerBrowser,
+    isMetaInAppBrowser,
     isEmbeddedBrowser
   }
 }

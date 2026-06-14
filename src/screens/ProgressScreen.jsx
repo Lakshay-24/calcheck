@@ -6,11 +6,15 @@ import {
   calculateWeeklyBreakdown,
   getUserProfile
 } from '../services/database'
-import { trackApiRequest } from '../services/diagnostics'
+import { recordStartupStep, trackApiRequest, trackStartupStep } from '../services/diagnostics'
+import { createLifecycleAbortController, getLifecycleGeneration, recordAppLifecycleEvent } from '../services/lifecycle'
 import { formatLocalTime, getUserTimezone } from '../utils/timezone'
+
+const PROGRESS_LOAD_TIMEOUT_MS = 5000
 
 export default function ProgressScreen({ user, resumeSignal = 0 }) {
   const loadRequestRef = useRef(0)
+  const activeLoadRef = useRef(null)
   const [todayTotals, setTodayTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [todayMeals, setTodayMeals] = useState([])
   const [weeklyBreakdown, setWeeklyBreakdown] = useState({})
@@ -28,29 +32,93 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
 
     const requestId = loadRequestRef.current + 1
     loadRequestRef.current = requestId
+    activeLoadRef.current?.abort('new progress load started')
+    const lifecycleRequest = createLifecycleAbortController(`progress:${reason}`)
+    activeLoadRef.current = lifecycleRequest
+    const lifecycleGeneration = getLifecycleGeneration()
+    const loadStartedAt = performance.now()
+    const loadStartTime = new Date().toISOString()
 
     try {
       console.info('[CalCheck] data refresh started', { screen: 'progress', reason })
       setLoading(true)
       setSlowNotice(null)
-      const [todayLogs, weekLogs, profile] = await trackApiRequest(
-        'history load',
-        () => Promise.all([
-          getMealLogsToday(user.id, timezone),
-          getMealLogsWeek(user.id, timezone),
-          getUserProfile(user.id).catch(() => null)
-        ]),
-        {
-          dedupeKey: `progress-history:${user.id}:${timezone}`,
-          onLongRequest: (message) => setSlowNotice(message)
-        }
+      recordProgressStep('progress screen open', {
+        reason,
+        startTime: loadStartTime,
+        durationMs: 0,
+        success: true,
+        blocksRender: false
+      })
+
+      const [todayLogs, weekLogs, profile] = await withProgressTimeout(
+        trackApiRequest(
+          'progress data load',
+          () => Promise.all([
+            trackStartupStep(
+              'progress today history query',
+              () => getMealLogsToday(user.id, timezone, { signal: lifecycleRequest.signal }),
+              {
+                blocksRender: true,
+                timeoutMs: PROGRESS_LOAD_TIMEOUT_MS,
+                fallbackValue: []
+              }
+            ),
+            trackStartupStep('progress week history query', () => getMealLogsWeek(user.id, timezone, { signal: lifecycleRequest.signal }), {
+              blocksRender: true,
+              timeoutMs: PROGRESS_LOAD_TIMEOUT_MS,
+              fallbackValue: []
+            }),
+            trackStartupStep('progress profile query', () => getUserProfile(user.id, { signal: lifecycleRequest.signal }).catch(() => null), {
+              blocksRender: true,
+              timeoutMs: PROGRESS_LOAD_TIMEOUT_MS,
+              fallbackValue: null
+            })
+          ]),
+          {
+            dedupeKey: `progress-history:${user.id}:${timezone}:${lifecycleGeneration}`,
+            onLongRequest: (message) => setSlowNotice(message)
+          }
+        ),
+        [[], [], null],
+        'progress data load',
+        lifecycleRequest
       )
 
-      if (loadRequestRef.current !== requestId) return
+      if (
+        loadRequestRef.current !== requestId ||
+        lifecycleRequest.signal.aborted ||
+        getLifecycleGeneration() !== lifecycleGeneration
+      ) {
+        recordAppLifecycleEvent('stale progress result ignored', {
+          reason,
+          requestId,
+          aborted: lifecycleRequest.signal.aborted,
+          lifecycleGeneration,
+          currentLifecycleGeneration: getLifecycleGeneration()
+        })
+        return
+      }
 
-      setTodayMeals(todayLogs)
-      setTodayTotals(calculateDailyTotals(todayLogs))
-      setWeeklyBreakdown(calculateWeeklyBreakdown(weekLogs, timezone))
+      const calculationStart = performance.now()
+      const calculationStartTime = new Date().toISOString()
+      const safeTodayLogs = Array.isArray(todayLogs) ? todayLogs : []
+      const safeWeekLogs = Array.isArray(weekLogs) ? weekLogs : []
+      const nextTodayTotals = calculateDailyTotals(safeTodayLogs)
+      const nextWeeklyBreakdown = calculateWeeklyBreakdown(safeWeekLogs, timezone)
+      recordProgressStep('progress calculations', {
+        startTime: calculationStartTime,
+        endTime: new Date().toISOString(),
+        durationMs: Math.round(performance.now() - calculationStart),
+        success: true,
+        blocksRender: true,
+        todayCount: safeTodayLogs.length,
+        weekCount: safeWeekLogs.length
+      })
+
+      setTodayMeals(safeTodayLogs)
+      setTodayTotals(nextTodayTotals)
+      setWeeklyBreakdown(nextWeeklyBreakdown)
 
       if (profile) {
         setGoals({
@@ -58,13 +126,32 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
           protein: profile.protein_target || 150
         })
       }
+      recordProgressStep('progress render ready', {
+        startTime: loadStartTime,
+        endTime: new Date().toISOString(),
+        durationMs: Math.round(performance.now() - loadStartedAt),
+        success: true,
+        blocksRender: true
+      })
       console.info('[CalCheck] data refresh completed', { screen: 'progress', reason })
     } catch (error) {
+      recordProgressStep('progress data load failed', {
+        startTime: loadStartTime,
+        endTime: new Date().toISOString(),
+        durationMs: Math.round(performance.now() - loadStartedAt),
+        success: false,
+        blocksRender: true,
+        error: error?.message || String(error)
+      })
       console.error('Error loading progress:', error)
     } finally {
       if (loadRequestRef.current === requestId) {
         setLoading(false)
       }
+      if (activeLoadRef.current?.id === lifecycleRequest.id) {
+        activeLoadRef.current = null
+      }
+      lifecycleRequest.release()
     }
   }, [timezone, user?.id])
 
@@ -78,6 +165,14 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
   }, [loadProgress, user?.id])
 
   useEffect(() => {
+    return () => {
+      activeLoadRef.current?.abort('progress unmounted')
+      activeLoadRef.current = null
+      loadRequestRef.current += 1
+    }
+  }, [])
+
+  useEffect(() => {
     if (!resumeSignal || !user?.id) return
     loadProgress('app-resume')
   }, [loadProgress, resumeSignal, user?.id])
@@ -87,20 +182,15 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
 
     const retryTimer = window.setTimeout(() => {
       console.warn('[CalCheck] loading timeout triggered', { screen: 'progress', seconds: 5 })
-      loadProgress('loading-timeout-retry')
-    }, 5000)
-
-    const recoveryTimer = window.setTimeout(() => {
-      console.warn('[CalCheck] loading timeout triggered', { screen: 'progress', seconds: 10 })
       loadRequestRef.current += 1
+      activeLoadRef.current?.abort('progress loading timeout')
+      activeLoadRef.current = null
       setLoading(false)
       setRecoveryKey((value) => value + 1)
-      window.setTimeout(() => loadProgress('soft-recovery'), 0)
-    }, 10000)
+    }, 5000)
 
     return () => {
       window.clearTimeout(retryTimer)
-      window.clearTimeout(recoveryTimer)
     }
   }, [loadProgress, loading])
 
@@ -246,4 +336,50 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
       </div>
     </div>
   )
+}
+
+function recordProgressStep(name, details) {
+  recordStartupStep({
+    name,
+    timestamp: new Date().toISOString(),
+    timedOut: false,
+    timeoutMs: PROGRESS_LOAD_TIMEOUT_MS,
+    ...details
+  })
+}
+
+function withProgressTimeout(promise, fallbackValue, stepName, lifecycleRequest) {
+  let timeoutId
+  let timedOut = false
+  const startTime = new Date().toISOString()
+  const startMs = performance.now()
+
+  const guardedPromise = Promise.resolve(promise).catch((error) => {
+    if (timedOut) {
+      console.warn('[CalCheck] progress request rejected after timeout', { stepName, error })
+      return fallbackValue
+    }
+
+    throw error
+  })
+
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutId = window.setTimeout(() => {
+      timedOut = true
+      lifecycleRequest?.abort(`${stepName} timeout`)
+      recordProgressStep(stepName, {
+        startTime,
+        endTime: new Date().toISOString(),
+        durationMs: Math.round(performance.now() - startMs),
+        success: false,
+        timedOut: true,
+        blocksRender: true
+      })
+      resolve(fallbackValue)
+    }, PROGRESS_LOAD_TIMEOUT_MS)
+  })
+
+  return Promise.race([guardedPromise, timeoutPromise]).finally(() => {
+    window.clearTimeout(timeoutId)
+  })
 }

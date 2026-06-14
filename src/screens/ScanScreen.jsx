@@ -16,7 +16,7 @@ import {
   syncSubscription
 } from '../services/subscriptions'
 import { signInWithGoogle } from '../services/supabase'
-import { trackApiRequest } from '../services/diagnostics'
+import { trackApiRequest, trackStartupStep } from '../services/diagnostics'
 import { formatLocalTime, formatLocalWeekday, getUserTimezone } from '../utils/timezone'
 import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
 
@@ -67,9 +67,21 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       const [mealLogs, profileResult, scanCount] = await trackApiRequest(
         'history load',
         () => Promise.all([
-          getMealLogsToday(user.id, timezone),
-          getUserProfile(user.id).catch(() => null),
-          getLifetimeScanCount(user.id).catch(() => 0)
+          trackStartupStep('history load', () => getMealLogsToday(user.id, timezone), {
+            blocksRender: false,
+            timeoutMs: 5000,
+            fallbackValue: []
+          }),
+          trackStartupStep('profile fetch', () => getUserProfile(user.id).catch(() => null), {
+            blocksRender: false,
+            timeoutMs: 5000,
+            fallbackValue: null
+          }),
+          trackStartupStep('scan counter fetch', () => getLifetimeScanCount(user.id).catch(() => 0), {
+            blocksRender: false,
+            timeoutMs: 5000,
+            fallbackValue: 0
+          })
         ]),
         {
           dedupeKey: `scan-history:${user.id}:${timezone}`,
@@ -142,20 +154,13 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
     const retryTimer = window.setTimeout(() => {
       console.warn('[CalCheck] loading timeout triggered', { screen: 'scan', seconds: 5 })
-      loadTodaysMeals('loading-timeout-retry')
-    }, 5000)
-
-    const recoveryTimer = window.setTimeout(() => {
-      console.warn('[CalCheck] loading timeout triggered', { screen: 'scan', seconds: 10 })
       loadRequestRef.current += 1
       setLoading(false)
       setRecoveryKey((value) => value + 1)
-      window.setTimeout(() => loadTodaysMeals('soft-recovery'), 0)
-    }, 10000)
+    }, 5000)
 
     return () => {
       window.clearTimeout(retryTimer)
-      window.clearTimeout(recoveryTimer)
     }
   }, [loadTodaysMeals, loading])
 
@@ -203,8 +208,16 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       let [latestProfile, latestScanCount] = await trackApiRequest(
         'access check',
         () => Promise.all([
-          getUserProfile(user.id),
-          getLifetimeScanCount(user.id)
+          trackStartupStep('access check profile fetch', () => getUserProfile(user.id), {
+            blocksRender: false,
+            timeoutMs: 5000,
+            fallbackValue: profile
+          }),
+          trackStartupStep('access check scan counter fetch', () => getLifetimeScanCount(user.id), {
+            blocksRender: false,
+            timeoutMs: 5000,
+            fallbackValue: lifetimeScans
+          })
         ]),
         {
           dedupeKey: `access-check:${user.id}`,
@@ -213,7 +226,11 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       )
 
       if (shouldRepairSubscriptionBeforeScan(latestProfile)) {
-        const syncResult = await syncSubscription().catch(() => null)
+        const syncResult = await trackStartupStep('subscription sync', () => syncSubscription().catch(() => null), {
+          blocksRender: false,
+          timeoutMs: 5000,
+          fallbackValue: null
+        })
         latestProfile = syncResult?.profile || latestProfile
       }
 

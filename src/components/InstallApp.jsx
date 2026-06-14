@@ -118,6 +118,11 @@ function useInstallController() {
   const handleInstall = async () => {
     if (isInstalled) return
 
+    if (platform.isMetaInAppBrowser) {
+      setSheet('external-browser')
+      return
+    }
+
     if (canUseNativePrompt) {
       const result = await promptInstall()
       if (result?.outcome !== 'unavailable') return
@@ -146,6 +151,10 @@ function useInstallController() {
 
 function InstallSheet({ type, platform, onClose }) {
   if (!type) return null
+
+  if (type === 'external-browser') {
+    return <ExternalBrowserSheet platform={platform} onClose={onClose} />
+  }
 
   const isIos = type === 'ios' || type === 'ios-embedded'
 
@@ -183,6 +192,74 @@ function InstallSheet({ type, platform, onClose }) {
       </div>
     </div>
   )
+}
+
+function ExternalBrowserSheet({ platform, onClose }) {
+  const isIos = platform.isIos
+  const browserName = isIos ? 'Safari' : 'Chrome'
+
+  const handleOpenBrowser = () => {
+    openExternalBrowser(platform)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/55 z-50 flex items-end sm:items-center sm:justify-center px-0 sm:px-4">
+      <div className="w-full sm:max-w-sm bg-white rounded-t-3xl sm:rounded-3xl p-6 shadow-[0_-18px_50px_rgba(16,42,42,0.18)]">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Open in {browserName}</h2>
+            <p className="text-sm text-gray-600 mt-2">
+              To install CalCheck, open this page in {browserName}.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-full hover:bg-gray-100"
+            aria-label="Close install message"
+          >
+            <X size={20} className="text-gray-700" />
+          </button>
+        </div>
+
+        <p className="mt-5 text-xs font-semibold text-gray-500">
+          Installation is only available in Safari or Chrome.
+        </p>
+
+        <div className="mt-6 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleOpenBrowser}
+            className="flex-1 bg-gradient-to-r from-brand-300 via-brand-400 to-brand-500 text-white font-bold py-3 px-5 rounded-2xl shadow-[0_12px_28px_rgba(17,245,246,0.24)] active:scale-95"
+          >
+            Open {browserName}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-3 rounded-2xl border border-gray-200 text-gray-600 font-bold active:scale-95"
+          >
+            Not Now
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function openExternalBrowser(platform) {
+  if (typeof window === 'undefined') return
+
+  const currentUrl = window.location.href
+
+  if (platform.isAndroid) {
+    const url = new URL(currentUrl)
+    const intentUrl = `intent://${url.host}${url.pathname}${url.search}${url.hash}#Intent;scheme=${url.protocol.replace(':', '')};package=com.android.chrome;end`
+    window.location.href = intentUrl
+    return
+  }
+
+  window.open(currentUrl, '_blank', 'noopener,noreferrer')
 }
 
 function IosSteps({ embedded }) {

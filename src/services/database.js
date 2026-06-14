@@ -47,6 +47,9 @@ const USER_PROFILE_COLUMNS = [
   'subscription_cancel_at_period_end'
 ].join(',')
 
+const withAbortSignal = (query, signal) =>
+  signal ? query.abortSignal(signal) : query
+
 // Meal CRUD operations
 export const saveMealLog = async (userId, mealData) => {
   const now = new Date()
@@ -131,35 +134,41 @@ export const saveMealLog = async (userId, mealData) => {
   return insertedMeal
 }
 
-export const getMealLogsToday = async (userId, timezone = getUserTimezone()) => {
+export const getMealLogsToday = async (userId, timezone = getUserTimezone(), options = {}) => {
   const startOfDay = getStartOfLocalDay(new Date(), timezone)
   const endOfDay = getEndOfLocalDay(new Date(), timezone)
 
-  const { data, error } = await trackApiRequest('history load today', () => supabase
+  const { data, error } = await trackApiRequest('history load today', () => withAbortSignal(
+    supabase
       .from('meal_logs')
       .select(MEAL_LOG_COLUMNS)
       .eq('user_id', userId)
       .gte('timestamp', startOfDay.toISOString())
       .lte('timestamp', endOfDay.toISOString())
-      .order('timestamp', { ascending: false }))
+      .order('timestamp', { ascending: false }),
+    options.signal
+  ))
 
   if (error) throw error
   return data
 }
 
-export const getMealLogsWeek = async (userId, timezone = getUserTimezone()) => {
+export const getMealLogsWeek = async (userId, timezone = getUserTimezone(), options = {}) => {
   const today = new Date()
   const weekStart = new Date(getStartOfLocalDay(today, timezone))
   weekStart.setUTCDate(weekStart.getUTCDate() - 6)
   const endOfToday = getEndOfLocalDay(today, timezone)
 
-  const { data, error } = await trackApiRequest('history load week', () => supabase
+  const { data, error } = await trackApiRequest('history load week', () => withAbortSignal(
+    supabase
       .from('meal_logs')
       .select(MEAL_LOG_COLUMNS)
       .eq('user_id', userId)
       .gte('timestamp', weekStart.toISOString())
       .lte('timestamp', endOfToday.toISOString())
-      .order('timestamp', { ascending: true }))
+      .order('timestamp', { ascending: true }),
+    options.signal
+  ))
 
   if (error) throw error
   return data
@@ -271,12 +280,15 @@ export const updateUserTimezone = async (userId, timezone = getUserTimezone()) =
 }
 
 // Get user profile
-export const getUserProfile = async (userId) => {
-  const { data, error } = await trackApiRequest('profile load', () => supabase
+export const getUserProfile = async (userId, options = {}) => {
+  const { data, error } = await trackApiRequest('profile load', () => withAbortSignal(
+    supabase
       .from('users')
       .select(USER_PROFILE_COLUMNS)
       .eq('id', userId)
-      .single())
+      .single(),
+    options.signal
+  ))
 
   if (error) throw error
   return data
