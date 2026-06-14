@@ -9,6 +9,7 @@ import ScanScreen from './screens/ScanScreen'
 import OnboardingScreen from './screens/OnboardingScreen'
 import ProgressScreen from './screens/ProgressScreen'
 import ProfileScreen from './screens/ProfileScreen'
+import InfoPage from './screens/InfoPage'
 import BottomNav from './components/BottomNav'
 
 async function ensureUserProfile(user) {
@@ -144,18 +145,19 @@ function App() {
     )
   }
 
-  if (!hasSeenOnboarding && !user) {
-    return <OnboardingScreen onComplete={() => setHasSeenOnboarding(true)} />
-  }
-
   return (
     <Router>
       <div className="h-screen w-screen flex flex-col bg-white overflow-hidden">
         <div className="flex-1 overflow-y-auto">
           <Routes>
+            <Route path="/info/:slug" element={<InfoPage />} />
             <Route
               path="/"
-              element={<ScanScreen key={`scan-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} />}
+              element={
+                !hasSeenOnboarding && !user
+                  ? <OnboardingScreen onComplete={() => setHasSeenOnboarding(true)} />
+                  : <ScanScreen key={`scan-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} />
+              }
             />
             <Route
               path="/progress"

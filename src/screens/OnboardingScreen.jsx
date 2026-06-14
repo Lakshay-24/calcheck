@@ -1,4 +1,5 @@
 import React from 'react'
+import { Link } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
 
 export default function OnboardingScreen({ onComplete }) {
@@ -24,7 +25,7 @@ export default function OnboardingScreen({ onComplete }) {
         </div>
 
         <h1 className="text-5xl md:text-6xl font-bold text-ink mb-4 leading-tight">
-          calcheck
+          CalCheck AI
         </h1>
 
         <p className="text-xl md:text-2xl text-muted mb-6 leading-relaxed max-w-md">
@@ -65,9 +66,16 @@ export default function OnboardingScreen({ onComplete }) {
           <ChevronRight size={20} />
         </button>
 
-        <p className="text-xs text-gray-500 mt-6">
-          We never store your photos. Your data is private.
+        <p className="text-xs text-gray-500 mt-6 max-w-sm leading-5">
+          Food photos are processed for AI nutrition estimates. CalCheck AI is not a medical app.
         </p>
+
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs font-semibold text-gray-500">
+          <Link to="/info/terms" className="hover:text-gray-800">Terms</Link>
+          <Link to="/info/privacy" className="hover:text-gray-800">Privacy</Link>
+          <Link to="/info/faq" className="hover:text-gray-800">FAQs</Link>
+          <Link to="/info/about" className="hover:text-gray-800">About</Link>
+        </div>
       </div>
 
       <div className="h-1 bg-gradient-to-r from-transparent via-brand-300 to-transparent" />

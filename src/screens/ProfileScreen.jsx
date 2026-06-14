@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Check, Loader2, LogOut } from 'lucide-react'
 import { InstallProfileCard } from '../components/InstallApp'
 import { getUserProfile, isUserPro } from '../services/database'
@@ -167,6 +168,8 @@ export default function ProfileScreen({ user }) {
           </p>
         </div>
 
+        <InfoLinksCard />
+
         <button
           onClick={() => setShowSignOutConfirm(true)}
           disabled={signingOut}
@@ -175,6 +178,33 @@ export default function ProfileScreen({ user }) {
           <LogOut size={20} />
           {signingOut ? 'Signing out...' : 'Sign Out'}
         </button>
+      </div>
+    </div>
+  )
+}
+
+function InfoLinksCard() {
+  const links = [
+    { to: '/info/terms', label: 'Terms & Conditions' },
+    { to: '/info/privacy', label: 'Privacy Policy' },
+    { to: '/info/faq', label: 'FAQs' },
+    { to: '/info/about', label: 'About Us' }
+  ]
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-2xl p-4">
+      <p className="text-sm font-semibold text-gray-700">Legal and Help</p>
+      <div className="mt-3 divide-y divide-gray-100">
+        {links.map((link) => (
+          <Link
+            key={link.to}
+            to={link.to}
+            className="flex items-center justify-between py-3 text-sm font-semibold text-gray-700 hover:text-gray-900"
+          >
+            <span>{link.label}</span>
+            <span className="text-gray-400">View</span>
+          </Link>
+        ))}
       </div>
     </div>
   )
@@ -401,6 +431,19 @@ function SubscriptionCard({ profile, loading, error, notice, onSubscribe, onMana
             )}
           </>
         )}
+      </div>
+
+      <div className="mt-5 rounded-xl bg-gray-50 p-4 text-xs leading-5 text-gray-600">
+        <p className="font-semibold text-gray-800">Subscription & Billing Policy</p>
+        <p className="mt-1">
+          Free users get 2 lifetime scans. CalCheck Pro renews monthly through Razorpay for
+          INR 69/month in India or USD 1.99/month internationally.
+        </p>
+        <p className="mt-2">
+          You can cancel anytime. Cancellation stops future renewals, Pro access continues
+          until the current billing period ends, and unused time is not prorated or refunded
+          unless required by law.
+        </p>
       </div>
     </div>
   )
