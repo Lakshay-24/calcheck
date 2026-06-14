@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { analyzeFood } from '../services/ai'
 import { saveMealLog, getOrCreateUserProfile } from '../services/database'
+import { trackApiRequest } from '../services/diagnostics'
 import { signInWithGoogle } from '../services/supabase'
 import AnalysisScreen from './AnalysisScreen'
 import ResultsScreen from './ResultsScreen'
@@ -39,6 +40,7 @@ export default function CameraModal({
   const [error, setError] = useState(null)
   const [isSaving, setIsSaving] = useState(false)
   const [cameraError, setCameraError] = useState(null)
+  const [requestNotice, setRequestNotice] = useState(null)
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const streamRef = useRef(null)
@@ -52,6 +54,7 @@ export default function CameraModal({
     }
 
     setError(null)
+    setRequestNotice(null)
     setCameraError(null)
     setStage('camera')
     setCapturedImage(null)
@@ -108,9 +111,12 @@ export default function CameraModal({
 
     try {
       setError(null)
+      setRequestNotice(null)
       setStage('analysis')
       const result = await withTimeout(
-        analyzeFood(base64Image),
+        trackApiRequest('analyze-food flow', () => analyzeFood(base64Image), {
+          onLongRequest: (message) => setRequestNotice(message)
+        }),
         45000,
         'Analysis is taking too long. Please try again.'
       )
@@ -118,12 +124,14 @@ export default function CameraModal({
       if (analysisRequestRef.current !== requestId) return
 
       setAnalysisResult(result)
+      setRequestNotice(null)
       onAnalysisComplete?.()
       setStage('results')
     } catch (err) {
       if (analysisRequestRef.current !== requestId) return
 
       setError(err.message || 'Failed to analyze food image. Please try again.')
+      setRequestNotice(null)
       setStage('camera')
       setCapturedImage(null)
     }
@@ -138,8 +146,16 @@ export default function CameraModal({
       meal_type: mealResult?.meal_type
     })
 
-    await getOrCreateUserProfile(user.id, user.email)
-    const savedMeal = await saveMealLog(user.id, mealResult)
+    const savedMeal = await trackApiRequest(
+      'save meal flow',
+      async () => {
+        await getOrCreateUserProfile(user.id, user.email)
+        return saveMealLog(user.id, mealResult)
+      },
+      {
+        onLongRequest: (message) => setRequestNotice(message)
+      }
+    )
     console.info('[CalCheck] CameraModal persistMeal saved', {
       id: savedMeal?.id,
       timezone: savedMeal?.timezone,
@@ -182,6 +198,7 @@ export default function CameraModal({
     try {
       setIsSaving(true)
       setError(null)
+      setRequestNotice(null)
 
       if (!user) {
         storePendingMeal(selectedMealResult, capturedImage)
@@ -190,8 +207,10 @@ export default function CameraModal({
       }
 
       await persistMeal(selectedMealResult)
+      setRequestNotice(null)
     } catch (err) {
       setError('Failed to save meal. Please try again.')
+      setRequestNotice(null)
       console.error('Save error:', err)
     } finally {
       setIsSaving(false)
@@ -204,6 +223,7 @@ export default function CameraModal({
     setCapturedImage(null)
     setAnalysisResult(null)
     setError(null)
+    setRequestNotice(null)
     setCameraError(null)
     stopDesktopCamera()
     onClose()
@@ -214,6 +234,7 @@ export default function CameraModal({
     setCapturedImage(null)
     setAnalysisResult(null)
     setError(null)
+    setRequestNotice(null)
     setStage('camera')
     if (pendingImage) {
       onClose()
@@ -275,6 +296,12 @@ export default function CameraModal({
           {error && (
             <div className="bg-red-50 border border-red-200 m-4 p-3 rounded-lg">
               <p className="text-sm text-red-800">{error}</p>
+            </div>
+          )}
+
+          {requestNotice && (
+            <div className="bg-yellow-50 border border-yellow-200 mx-4 mb-4 p-3 rounded-lg">
+              <p className="text-sm font-semibold text-yellow-800">{requestNotice}</p>
             </div>
           )}
         </div>

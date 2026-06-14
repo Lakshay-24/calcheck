@@ -16,6 +16,7 @@ import {
   syncSubscription
 } from '../services/subscriptions'
 import { signInWithGoogle } from '../services/supabase'
+import { trackApiRequest } from '../services/diagnostics'
 import { formatLocalTime, formatLocalWeekday, getUserTimezone } from '../utils/timezone'
 import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
 
@@ -62,11 +63,17 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     try {
       console.info('[CalCheck] data refresh started', { screen: 'scan', reason })
       setLoading(true)
-      const [mealLogs, profileResult, scanCount] = await Promise.all([
-        getMealLogsToday(user.id, timezone),
-        getUserProfile(user.id).catch(() => null),
-        getLifetimeScanCount(user.id).catch(() => 0)
-      ])
+      const [mealLogs, profileResult, scanCount] = await trackApiRequest(
+        'history load',
+        () => Promise.all([
+          getMealLogsToday(user.id, timezone),
+          getUserProfile(user.id).catch(() => null),
+          getLifetimeScanCount(user.id).catch(() => 0)
+        ]),
+        {
+          onLongRequest: (message) => setSaveNotice(message)
+        }
+      )
 
       if (loadRequestRef.current !== requestId) return
 
@@ -188,10 +195,16 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
     try {
       setScanGateLoading(true)
-      let [latestProfile, latestScanCount] = await Promise.all([
-        getUserProfile(user.id),
-        getLifetimeScanCount(user.id)
-      ])
+      let [latestProfile, latestScanCount] = await trackApiRequest(
+        'access check',
+        () => Promise.all([
+          getUserProfile(user.id),
+          getLifetimeScanCount(user.id)
+        ]),
+        {
+          onLongRequest: (message) => setSaveNotice(message)
+        }
+      )
 
       if (shouldRepairSubscriptionBeforeScan(latestProfile)) {
         const syncResult = await syncSubscription().catch(() => null)

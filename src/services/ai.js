@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { recordError, recordImageDiagnostics, trackApiRequest } from './diagnostics'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK_AI === 'true'
 const MAX_ANALYSIS_IMAGE_SIZE = 1600
@@ -21,6 +22,17 @@ export const MOCK_FOOD_ANALYSIS = {
     { name: 'Chole Bhature', confidence: 0.5 },
     { name: 'Chana Masala with Fried Bread', confidence: 0.35 }
   ]
+}
+
+const getBase64ByteSize = (value) => {
+  const base64 = String(value || '').split(',').pop() || ''
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding)
+}
+
+const formatBytes = (bytes) => {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MB`
+  return `${Math.round(bytes / 1024)} KB`
 }
 
 const compressImage = async (base64Image) => {
@@ -51,11 +63,19 @@ const compressImage = async (base64Image) => {
       const ctx = canvas.getContext('2d')
       ctx.drawImage(img, 0, 0, width, height)
 
-      resolve(
-        canvas
-          .toDataURL('image/jpeg', ANALYSIS_JPEG_QUALITY)
-          .split(',')[1]
-      )
+      const compressedBase64 = canvas
+        .toDataURL('image/jpeg', ANALYSIS_JPEG_QUALITY)
+        .split(',')[1]
+
+      resolve({
+        base64: compressedBase64,
+        originalWidth: img.width,
+        originalHeight: img.height,
+        uploadWidth: Math.round(width),
+        uploadHeight: Math.round(height),
+        originalBytes: getBase64ByteSize(base64Image),
+        uploadBytes: getBase64ByteSize(compressedBase64)
+      })
     }
 
     img.src = base64Image
@@ -122,18 +142,31 @@ export const analyzeFood = async (imageData) => {
     return { ...MOCK_FOOD_ANALYSIS }
   }
 
-  const compressedBase64 = await compressImage(imageData)
+  const imageDiagnostics = await compressImage(imageData)
 
-  const { data, error } = await supabase.functions.invoke('analyze-food', {
-    body: { image: compressedBase64 }
+  recordImageDiagnostics({
+    original_size_bytes: imageDiagnostics.originalBytes,
+    original_size_display: formatBytes(imageDiagnostics.originalBytes),
+    original_width: imageDiagnostics.originalWidth,
+    original_height: imageDiagnostics.originalHeight,
+    upload_size_bytes: imageDiagnostics.uploadBytes,
+    upload_size_display: formatBytes(imageDiagnostics.uploadBytes),
+    upload_width: imageDiagnostics.uploadWidth,
+    upload_height: imageDiagnostics.uploadHeight
   })
+
+  const { data, error } = await trackApiRequest('analyze-food', () => supabase.functions.invoke('analyze-food', {
+    body: { image: imageDiagnostics.base64 }
+  }))
 
   if (error) {
     throw new Error(error.message || 'Failed to analyze food image. Please try again.')
   }
 
   if (data?.error) {
-    throw new Error(data.error)
+    const analysisError = new Error(data.error)
+    recordError('analyze-food', analysisError)
+    throw analysisError
   }
 
   return normalizeFoodAnalysis(data)

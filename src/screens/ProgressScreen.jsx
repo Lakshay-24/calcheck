@@ -6,6 +6,7 @@ import {
   calculateWeeklyBreakdown,
   getUserProfile
 } from '../services/database'
+import { trackApiRequest } from '../services/diagnostics'
 import { formatLocalTime, getUserTimezone } from '../utils/timezone'
 
 export default function ProgressScreen({ user, resumeSignal = 0 }) {
@@ -16,6 +17,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
   const [goals, setGoals] = useState({ calories: 2500, protein: 150 })
   const [loading, setLoading] = useState(true)
   const [recoveryKey, setRecoveryKey] = useState(0)
+  const [slowNotice, setSlowNotice] = useState(null)
   const timezone = getUserTimezone()
 
   const loadProgress = useCallback(async (reason = 'screen-load') => {
@@ -30,11 +32,18 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
     try {
       console.info('[CalCheck] data refresh started', { screen: 'progress', reason })
       setLoading(true)
-      const [todayLogs, weekLogs, profile] = await Promise.all([
-        getMealLogsToday(user.id, timezone),
-        getMealLogsWeek(user.id, timezone),
-        getUserProfile(user.id).catch(() => null)
-      ])
+      setSlowNotice(null)
+      const [todayLogs, weekLogs, profile] = await trackApiRequest(
+        'history load',
+        () => Promise.all([
+          getMealLogsToday(user.id, timezone),
+          getMealLogsWeek(user.id, timezone),
+          getUserProfile(user.id).catch(() => null)
+        ]),
+        {
+          onLongRequest: (message) => setSlowNotice(message)
+        }
+      )
 
       if (loadRequestRef.current !== requestId) return
 
@@ -107,8 +116,13 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
 
   if (loading) {
     return (
-      <div className="h-full w-full flex items-center justify-center bg-white pb-24">
+      <div className="h-full w-full flex flex-col items-center justify-center gap-3 bg-white px-6 pb-24 text-center">
         <p className="text-gray-500 text-sm">Loading progress...</p>
+        {slowNotice && (
+          <p className="rounded-xl bg-yellow-50 border border-yellow-200 px-4 py-3 text-sm font-semibold text-yellow-800">
+            {slowNotice}
+          </p>
+        )}
       </div>
     )
   }
@@ -121,6 +135,12 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
       </div>
 
       <div className="px-6 py-6 space-y-6">
+        {slowNotice && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 text-sm font-semibold text-yellow-800">
+            {slowNotice}
+          </div>
+        )}
+
         <div className="bg-gradient-to-br from-brand-50 to-transparent border border-brand-300/50 rounded-3xl p-6 space-y-5">
           <h2 className="text-lg font-bold text-gray-900">Today</h2>
 

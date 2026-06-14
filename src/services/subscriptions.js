@@ -1,36 +1,49 @@
 import { supabase } from './supabase'
+import { recordError, trackApiRequest } from './diagnostics'
 
 const RAZORPAY_CHECKOUT_URL = 'https://checkout.razorpay.com/v1/checkout.js'
 
 let razorpayScriptPromise = null
 
 export const createSubscription = async () => {
-  const { data, error } = await supabase.functions.invoke('create-subscription', {
+  const { data, error } = await trackApiRequest('create subscription', () => supabase.functions.invoke('create-subscription', {
     body: {}
-  })
+  }))
 
   if (error) throw new Error(error.message || 'Could not create subscription')
-  if (data?.error) throw new Error(data.error)
+  if (data?.error) {
+    const responseError = new Error(data.error)
+    recordError('create subscription', responseError)
+    throw responseError
+  }
   return data
 }
 
 export const syncSubscription = async () => {
-  const { data, error } = await supabase.functions.invoke('sync-subscription', {
+  const { data, error } = await trackApiRequest('sync subscription', () => supabase.functions.invoke('sync-subscription', {
     body: {}
-  })
+  }))
 
   if (error) throw new Error(error.message || 'Could not sync subscription')
-  if (data?.error) throw new Error(data.error)
+  if (data?.error) {
+    const responseError = new Error(data.error)
+    recordError('sync subscription', responseError)
+    throw responseError
+  }
   return data
 }
 
 export const cancelSubscription = async () => {
-  const { data, error } = await supabase.functions.invoke('cancel-subscription', {
+  const { data, error } = await trackApiRequest('cancel subscription', () => supabase.functions.invoke('cancel-subscription', {
     body: {}
-  })
+  }))
 
   if (error) throw new Error(error.message || 'Could not cancel subscription')
-  if (data?.error) throw new Error(data.error)
+  if (data?.error) {
+    const responseError = new Error(data.error)
+    recordError('cancel subscription', responseError)
+    throw responseError
+  }
   return data
 }
 

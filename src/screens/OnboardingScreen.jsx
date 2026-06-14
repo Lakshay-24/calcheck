@@ -73,7 +73,6 @@ export default function OnboardingScreen({ onComplete }) {
         <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs font-semibold text-gray-500">
           <Link to="/info/terms" className="hover:text-gray-800">Terms</Link>
           <Link to="/info/privacy" className="hover:text-gray-800">Privacy</Link>
-          <Link to="/info/faq" className="hover:text-gray-800">FAQs</Link>
           <Link to="/info/about" className="hover:text-gray-800">About</Link>
         </div>
       </div>

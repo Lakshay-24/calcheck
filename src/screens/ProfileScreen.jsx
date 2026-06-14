@@ -9,6 +9,7 @@ import {
   openRazorpaySubscriptionCheckout,
   syncSubscription
 } from '../services/subscriptions'
+import { getDiagnosticsSnapshot } from '../services/diagnostics'
 import { signOut } from '../services/supabase'
 
 export default function ProfileScreen({ user }) {
@@ -19,6 +20,9 @@ export default function ProfileScreen({ user }) {
   const [subscriptionNotice, setSubscriptionNotice] = useState(null)
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false)
   const [cancelStep, setCancelStep] = useState(null)
+  const [diagnosticsVisible, setDiagnosticsVisible] = useState(false)
+  const [diagnosticsTapCount, setDiagnosticsTapCount] = useState(0)
+  const [diagnostics, setDiagnostics] = useState(() => getDiagnosticsSnapshot())
 
   useEffect(() => {
     if (!user?.id) return
@@ -29,6 +33,31 @@ export default function ProfileScreen({ user }) {
         console.error('Profile subscription load error:', error)
       })
   }, [user?.id])
+
+  useEffect(() => {
+    const refreshDiagnostics = () => setDiagnostics(getDiagnosticsSnapshot())
+
+    window.addEventListener('calcheck-diagnostics-updated', refreshDiagnostics)
+    window.addEventListener('online', refreshDiagnostics)
+    window.addEventListener('offline', refreshDiagnostics)
+
+    return () => {
+      window.removeEventListener('calcheck-diagnostics-updated', refreshDiagnostics)
+      window.removeEventListener('online', refreshDiagnostics)
+      window.removeEventListener('offline', refreshDiagnostics)
+    }
+  }, [])
+
+  const handleDiagnosticsTap = () => {
+    const nextCount = diagnosticsTapCount + 1
+    setDiagnosticsTapCount(nextCount)
+
+    if (nextCount >= 5) {
+      setDiagnosticsVisible((visible) => !visible)
+      setDiagnosticsTapCount(0)
+      setDiagnostics(getDiagnosticsSnapshot())
+    }
+  }
 
   const handleSignOut = async () => {
     try {
@@ -137,7 +166,14 @@ export default function ProfileScreen({ user }) {
 
       <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4">
         <h1 className="text-2xl font-bold text-gray-900">Profile</h1>
-        <p className="text-sm text-gray-500 mt-1">Your account</p>
+        <button
+          type="button"
+          onClick={handleDiagnosticsTap}
+          className="text-sm text-gray-500 mt-1"
+          aria-label="Your account"
+        >
+          Your account
+        </button>
       </div>
 
       <div className="px-6 py-6 space-y-6">
@@ -161,6 +197,8 @@ export default function ProfileScreen({ user }) {
           onCancel={() => setCancelStep('intro')}
         />
 
+        {diagnosticsVisible && <DiagnosticsPanel diagnostics={diagnostics} />}
+
         <div className="bg-gray-50 rounded-2xl p-4 space-y-2">
           <p className="text-sm font-semibold text-gray-700">Account</p>
           <p className="text-sm text-gray-500">
@@ -183,11 +221,99 @@ export default function ProfileScreen({ user }) {
   )
 }
 
+function DiagnosticsPanel({ diagnostics }) {
+  const recentRequests = diagnostics.requests || []
+  const lastFailed = diagnostics.lastFailedRequest
+  const lastImage = diagnostics.lastImage
+
+  return (
+    <div className="bg-gray-950 text-gray-100 rounded-2xl p-4 space-y-4">
+      <div>
+        <p className="text-sm font-bold">Diagnostics</p>
+        <p className="text-xs text-gray-400 mt-1">
+          {diagnostics.online ? 'Online' : 'Offline'} - v{diagnostics.appVersion}
+        </p>
+        <p className="text-xs text-gray-400 mt-1 break-all">
+          Build: {formatDiagnosticDate(diagnostics.buildTimestamp)}
+        </p>
+      </div>
+
+      <div>
+        <p className="text-xs font-semibold uppercase text-gray-400">Last API durations</p>
+        <div className="mt-2 space-y-2">
+          {recentRequests.length === 0 ? (
+            <p className="text-xs text-gray-500">No requests logged yet.</p>
+          ) : (
+            recentRequests.slice(0, 6).map((request) => (
+              <div key={request.id} className="rounded-xl bg-white/5 p-3 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-semibold text-gray-100">{request.requestName}</span>
+                  <span className={request.success ? 'text-brand-300' : 'text-red-300'}>
+                    {request.success ? 'success' : 'failed'}
+                  </span>
+                </div>
+                <p className="mt-1 text-gray-400">
+                  {request.durationMs}ms - {formatDiagnosticDate(request.endTime)}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div>
+        <p className="text-xs font-semibold uppercase text-gray-400">Last failed request</p>
+        {lastFailed ? (
+          <div className="mt-2 rounded-xl bg-red-950/40 border border-red-900 p-3 text-xs">
+            <p className="font-semibold text-red-200">{lastFailed.requestName}</p>
+            <p className="mt-1 text-red-100 break-words">{lastFailed.message}</p>
+            <p className="mt-1 text-red-300">{formatDiagnosticDate(lastFailed.timestamp)}</p>
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-gray-500">No failed requests logged.</p>
+        )}
+      </div>
+
+      <div>
+        <p className="text-xs font-semibold uppercase text-gray-400">Last image upload</p>
+        {lastImage ? (
+          <div className="mt-2 rounded-xl bg-white/5 p-3 text-xs text-gray-300">
+            <p>
+              Original: {lastImage.original_size_display} - {lastImage.original_width}x{lastImage.original_height}
+            </p>
+            <p className="mt-1">
+              Upload: {lastImage.upload_size_display} - {lastImage.upload_width}x{lastImage.upload_height}
+            </p>
+            <p className="mt-1 text-gray-500">{formatDiagnosticDate(lastImage.timestamp)}</p>
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-gray-500">No image diagnostics logged yet.</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function formatDiagnosticDate(value) {
+  if (!value || value === 'development') return value || 'Unknown'
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    }).format(new Date(value))
+  } catch {
+    return value
+  }
+}
+
 function InfoLinksCard() {
   const links = [
     { to: '/info/terms', label: 'Terms & Conditions' },
     { to: '/info/privacy', label: 'Privacy Policy' },
-    { to: '/info/faq', label: 'FAQs' },
     { to: '/info/about', label: 'About Us' }
   ]
 
@@ -431,19 +557,6 @@ function SubscriptionCard({ profile, loading, error, notice, onSubscribe, onMana
             )}
           </>
         )}
-      </div>
-
-      <div className="mt-5 rounded-xl bg-gray-50 p-4 text-xs leading-5 text-gray-600">
-        <p className="font-semibold text-gray-800">Subscription & Billing Policy</p>
-        <p className="mt-1">
-          Free users get 2 lifetime scans. CalCheck Pro renews monthly through Razorpay for
-          INR 69/month in India or USD 1.99/month internationally.
-        </p>
-        <p className="mt-2">
-          You can cancel anytime. Cancellation stops future renewals, Pro access continues
-          until the current billing period ends, and unused time is not prorated or refunded
-          unless required by law.
-        </p>
       </div>
     </div>
   )

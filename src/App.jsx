@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { supabase } from './services/supabase.js'
 import { getOrCreateUserProfile } from './services/database'
+import { trackApiRequest } from './services/diagnostics'
 import './index.css'
 
 import ScanScreen from './screens/ScanScreen'
@@ -38,11 +39,11 @@ function App() {
 
     try {
       console.info('[CalCheck] data refresh started', { source, target: 'auth' })
-      const { data: { session } } = await supabase.auth.getSession()
+      const { data: { session } } = await trackApiRequest('auth session load', () => supabase.auth.getSession())
       let activeSession = session
 
       if (session) {
-        const { data, error } = await supabase.auth.refreshSession()
+        const { data, error } = await trackApiRequest('auth session refresh', () => supabase.auth.refreshSession())
         if (error) {
           console.warn('[CalCheck] session refresh skipped or failed', error)
         } else if (data?.session) {
