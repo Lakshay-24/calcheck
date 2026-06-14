@@ -41,6 +41,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
           getUserProfile(user.id).catch(() => null)
         ]),
         {
+          dedupeKey: `progress-history:${user.id}:${timezone}`,
           onLongRequest: (message) => setSlowNotice(message)
         }
       )

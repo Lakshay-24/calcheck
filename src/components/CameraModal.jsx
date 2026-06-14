@@ -4,6 +4,7 @@ import { analyzeFood } from '../services/ai'
 import { saveMealLog, getOrCreateUserProfile } from '../services/database'
 import { trackApiRequest } from '../services/diagnostics'
 import { signInWithGoogle } from '../services/supabase'
+import { prepareImageForAnalysis, revokeImagePreview } from '../utils/imagePerformance'
 import AnalysisScreen from './AnalysisScreen'
 import ResultsScreen from './ResultsScreen'
 
@@ -22,8 +23,8 @@ export const clearPendingMeal = () => {
   sessionStorage.removeItem(PENDING_MEAL_KEY)
 }
 
-export const storePendingMeal = (result, image) => {
-  sessionStorage.setItem(PENDING_MEAL_KEY, JSON.stringify({ result, image }))
+export const storePendingMeal = (result) => {
+  sessionStorage.setItem(PENDING_MEAL_KEY, JSON.stringify({ result }))
 }
 
 export default function CameraModal({
@@ -45,10 +46,14 @@ export default function CameraModal({
   const canvasRef = useRef(null)
   const streamRef = useRef(null)
   const analysisRequestRef = useRef(0)
+  const uploadImageRef = useRef(null)
+  const previewUrlRef = useRef(null)
 
   useEffect(() => {
     if (!isOpen) {
       analysisRequestRef.current += 1
+      clearPreviewUrl()
+      uploadImageRef.current = null
       stopDesktopCamera()
       return
     }
@@ -61,14 +66,17 @@ export default function CameraModal({
     setAnalysisResult(null)
 
     if (pendingImage) {
-      setCapturedImage(pendingImage)
-      analyzePhoto(pendingImage)
+      prepareAndAnalyzePhoto(pendingImage, 'upload')
       return
     }
 
     startDesktopCamera()
 
-    return stopDesktopCamera
+    return () => {
+      clearPreviewUrl()
+      uploadImageRef.current = null
+      stopDesktopCamera()
+    }
   }, [isOpen, pendingImage])
 
   const startDesktopCamera = async () => {
@@ -105,7 +113,19 @@ export default function CameraModal({
     streamRef.current = null
   }
 
-  const analyzePhoto = async (base64Image) => {
+  const clearPreviewUrl = () => {
+    if (!previewUrlRef.current) return
+    revokeImagePreview(previewUrlRef.current)
+    previewUrlRef.current = null
+  }
+
+  const setPreviewUrl = (previewUrl) => {
+    clearPreviewUrl()
+    previewUrlRef.current = previewUrl
+    setCapturedImage(previewUrl)
+  }
+
+  const prepareAndAnalyzePhoto = async (imageSource, sourceLabel) => {
     const requestId = analysisRequestRef.current + 1
     analysisRequestRef.current = requestId
 
@@ -113,8 +133,18 @@ export default function CameraModal({
       setError(null)
       setRequestNotice(null)
       setStage('analysis')
+      const preparedImage = await prepareImageForAnalysis(imageSource, sourceLabel)
+
+      if (analysisRequestRef.current !== requestId) {
+        revokeImagePreview(preparedImage.previewUrl)
+        return
+      }
+
+      uploadImageRef.current = preparedImage.dataUrl
+      setPreviewUrl(preparedImage.previewUrl)
+
       const result = await withTimeout(
-        trackApiRequest('analyze-food flow', () => analyzeFood(base64Image), {
+        trackApiRequest('analyze-food flow', () => analyzeFood(preparedImage.dataUrl), {
           onLongRequest: (message) => setRequestNotice(message)
         }),
         45000,
@@ -134,6 +164,8 @@ export default function CameraModal({
       setRequestNotice(null)
       setStage('camera')
       setCapturedImage(null)
+      clearPreviewUrl()
+      uploadImageRef.current = null
     }
   }
 
@@ -178,10 +210,8 @@ export default function CameraModal({
     canvas.height = video.videoHeight
     context.drawImage(video, 0, 0, canvas.width, canvas.height)
 
-    const photo = canvas.toDataURL('image/jpeg', 0.92)
-    setCapturedImage(photo)
     stopDesktopCamera()
-    analyzePhoto(photo)
+    prepareAndAnalyzePhoto(canvas, 'camera-capture')
   }
 
   const handleSaveMeal = async (selectedMealResult = analysisResult) => {
@@ -201,7 +231,7 @@ export default function CameraModal({
       setRequestNotice(null)
 
       if (!user) {
-        storePendingMeal(selectedMealResult, capturedImage)
+        storePendingMeal(selectedMealResult)
         await signInWithGoogle()
         return
       }
@@ -225,6 +255,8 @@ export default function CameraModal({
     setError(null)
     setRequestNotice(null)
     setCameraError(null)
+    uploadImageRef.current = null
+    clearPreviewUrl()
     stopDesktopCamera()
     onClose()
   }
@@ -235,6 +267,8 @@ export default function CameraModal({
     setAnalysisResult(null)
     setError(null)
     setRequestNotice(null)
+    uploadImageRef.current = null
+    clearPreviewUrl()
     setStage('camera')
     if (pendingImage) {
       onClose()

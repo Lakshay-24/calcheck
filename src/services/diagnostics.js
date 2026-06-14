@@ -1,12 +1,14 @@
 const DIAGNOSTICS_KEY = 'calcheck-diagnostics'
 const LONG_REQUEST_MS = 15000
 const MAX_REQUESTS = 12
+const inFlightRequests = new Map()
 
 const emptyDiagnostics = {
   requests: [],
   lastFailedRequest: null,
   lastError: null,
-  lastImage: null
+  lastImage: null,
+  performance: []
 }
 
 const safeNow = () => {
@@ -86,7 +88,29 @@ export const recordImageDiagnostics = (details) => {
   console.info('[CalCheck] image diagnostics', nextDetails)
 }
 
+export const recordPerformanceMetric = (name, details = {}) => {
+  const current = readDiagnostics()
+  const entry = {
+    name,
+    ...details,
+    timestamp: new Date().toISOString()
+  }
+
+  writeDiagnostics({
+    ...current,
+    performance: [entry, ...(current.performance || [])].slice(0, 12)
+  })
+
+  console.info('[CalCheck] performance metric', entry)
+}
+
 export const trackApiRequest = async (requestName, requestFactory, options = {}) => {
+  const dedupeKey = options.dedupeKey || null
+  if (dedupeKey && inFlightRequests.has(dedupeKey)) {
+    console.info('[CalCheck] API request deduped', { requestName, dedupeKey })
+    return inFlightRequests.get(dedupeKey)
+  }
+
   const startMs = safeNow()
   const startTime = new Date().toISOString()
   let longRequestTimer
@@ -107,7 +131,7 @@ export const trackApiRequest = async (requestName, requestFactory, options = {})
 
   console.info('[CalCheck] API request started', { requestName, startTime })
 
-  try {
+  const requestPromise = (async () => {
     const result = await requestFactory()
     const endMs = safeNow()
     const endTime = new Date().toISOString()
@@ -153,6 +177,12 @@ export const trackApiRequest = async (requestName, requestFactory, options = {})
       success: true
     })
     return result
+  })()
+
+  if (dedupeKey) inFlightRequests.set(dedupeKey, requestPromise)
+
+  try {
+    return await requestPromise
   } catch (error) {
     const endMs = safeNow()
     const endTime = new Date().toISOString()
@@ -180,6 +210,7 @@ export const trackApiRequest = async (requestName, requestFactory, options = {})
     throw error
   } finally {
     if (longRequestTimer) window.clearTimeout(longRequestTimer)
+    if (dedupeKey) inFlightRequests.delete(dedupeKey)
   }
 }
 

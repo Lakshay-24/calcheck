@@ -39,11 +39,19 @@ function App() {
 
     try {
       console.info('[CalCheck] data refresh started', { source, target: 'auth' })
-      const { data: { session } } = await trackApiRequest('auth session load', () => supabase.auth.getSession())
+      const { data: { session } } = await trackApiRequest(
+        'auth session load',
+        () => supabase.auth.getSession(),
+        { dedupeKey: 'auth-session-load' }
+      )
       let activeSession = session
 
       if (session) {
-        const { data, error } = await trackApiRequest('auth session refresh', () => supabase.auth.refreshSession())
+        const { data, error } = await trackApiRequest(
+          'auth session refresh',
+          () => supabase.auth.refreshSession(),
+          { dedupeKey: 'auth-session-refresh' }
+        )
         if (error) {
           console.warn('[CalCheck] session refresh skipped or failed', error)
         } else if (data?.session) {

@@ -8,6 +8,17 @@ import {
 
 const INR_PLAN_ID = Deno.env.get('RAZORPAY_PLAN_ID_INR_MONTHLY') || 'plan_T0xf4EGXgLZ24b'
 const USD_PLAN_ID = Deno.env.get('RAZORPAY_PLAN_ID_USD_MONTHLY') || 'plan_T0xfxE81gmOfCY'
+const PROFILE_COLUMNS = [
+  'id',
+  'email',
+  'subscription_status',
+  'is_pro',
+  'razorpay_subscription_id',
+  'subscription_currency',
+  'billing_country',
+  'current_period_end',
+  'subscription_cancel_at_period_end'
+].join(',')
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
@@ -24,7 +35,7 @@ Deno.serve(async (request) => {
 
     let { data: profile } = await supabase
       .from('users')
-      .select('*')
+      .select(PROFILE_COLUMNS)
       .eq('id', user.id)
       .maybeSingle()
 
@@ -44,7 +55,7 @@ Deno.serve(async (request) => {
           subscription_currency: currency,
           subscription_updated_at: new Date().toISOString()
         })
-        .select()
+        .select(PROFILE_COLUMNS)
         .single()
 
       if (createError) throw createError
@@ -105,7 +116,7 @@ Deno.serve(async (request) => {
         subscription_updated_at: now
       })
       .eq('id', user.id)
-      .select()
+      .select(PROFILE_COLUMNS)
       .single()
 
     if (userError) throw userError

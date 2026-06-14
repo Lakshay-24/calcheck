@@ -6,6 +6,18 @@ import {
   razorpayRequest
 } from '../_shared/subscriptions.ts'
 
+const PROFILE_COLUMNS = [
+  'id',
+  'email',
+  'subscription_status',
+  'is_pro',
+  'razorpay_subscription_id',
+  'subscription_currency',
+  'billing_country',
+  'current_period_end',
+  'subscription_cancel_at_period_end'
+].join(',')
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
   if (request.method !== 'POST') return jsonResponse({ error: 'Method not allowed' }, 405)
@@ -16,7 +28,7 @@ Deno.serve(async (request) => {
 
     const { data: profile, error: profileError } = await supabase
       .from('users')
-      .select('*')
+      .select(PROFILE_COLUMNS)
       .eq('id', user.id)
       .single()
 
@@ -43,7 +55,7 @@ Deno.serve(async (request) => {
         subscription_updated_at: now
       })
       .eq('id', user.id)
-      .select()
+      .select(PROFILE_COLUMNS)
       .single()
 
     if (updateError) throw updateError

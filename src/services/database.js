@@ -9,6 +9,44 @@ import {
   parseDatabaseTimestamp
 } from '../utils/timezone'
 
+const MEAL_LOG_COLUMNS = [
+  'id',
+  'food_name',
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'meal_score',
+  'protein_level',
+  'recommended_for',
+  'portion_size',
+  'estimated_grams',
+  'portion_confidence',
+  'confidence',
+  'portion_multiplier',
+  'timestamp',
+  'timezone',
+  'local_date',
+  'meal_type'
+].join(',')
+
+const USER_PROFILE_COLUMNS = [
+  'id',
+  'email',
+  'goal',
+  'calorie_target',
+  'protein_target',
+  'subscription_status',
+  'is_pro',
+  'scans_used_today',
+  'timezone',
+  'timezone_updated_at',
+  'razorpay_subscription_id',
+  'subscription_currency',
+  'current_period_end',
+  'subscription_cancel_at_period_end'
+].join(',')
+
 // Meal CRUD operations
 export const saveMealLog = async (userId, mealData) => {
   const now = new Date()
@@ -42,7 +80,7 @@ export const saveMealLog = async (userId, mealData) => {
   const { data, error } = await trackApiRequest('save meal', () => supabase
     .from('meal_logs')
     .insert(insertPayload)
-    .select())
+    .select(MEAL_LOG_COLUMNS))
 
   if (error) throw error
 
@@ -74,7 +112,7 @@ export const saveMealLog = async (userId, mealData) => {
           meal_type: mealType
         })
         .eq('id', insertedMeal.id)
-        .select()
+        .select(MEAL_LOG_COLUMNS)
         .single())
 
     if (repairError) throw repairError
@@ -99,7 +137,7 @@ export const getMealLogsToday = async (userId, timezone = getUserTimezone()) => 
 
   const { data, error } = await trackApiRequest('history load today', () => supabase
       .from('meal_logs')
-      .select('*')
+      .select(MEAL_LOG_COLUMNS)
       .eq('user_id', userId)
       .gte('timestamp', startOfDay.toISOString())
       .lte('timestamp', endOfDay.toISOString())
@@ -117,7 +155,7 @@ export const getMealLogsWeek = async (userId, timezone = getUserTimezone()) => {
 
   const { data, error } = await trackApiRequest('history load week', () => supabase
       .from('meal_logs')
-      .select('*')
+      .select(MEAL_LOG_COLUMNS)
       .eq('user_id', userId)
       .gte('timestamp', weekStart.toISOString())
       .lte('timestamp', endOfToday.toISOString())
@@ -171,7 +209,7 @@ export const getOrCreateUserProfile = async (userId, email) => {
 
   const { data: existing } = await trackApiRequest('profile lookup', () => supabase
       .from('users')
-      .select('*')
+      .select(USER_PROFILE_COLUMNS)
       .eq('id', userId)
       .maybeSingle())
 
@@ -197,7 +235,7 @@ export const getOrCreateUserProfile = async (userId, email) => {
         timezone,
         timezone_updated_at: new Date().toISOString()
       })
-      .select()
+      .select(USER_PROFILE_COLUMNS)
       .single())
 
   if (error) throw error
@@ -210,7 +248,7 @@ export const updateUserProfile = async (userId, updates) => {
       .from('users')
       .update(updates)
       .eq('id', userId)
-      .select()
+      .select(USER_PROFILE_COLUMNS)
       .single())
 
   if (error) throw error
@@ -225,7 +263,7 @@ export const updateUserTimezone = async (userId, timezone = getUserTimezone()) =
         timezone_updated_at: new Date().toISOString()
       })
       .eq('id', userId)
-      .select()
+      .select(USER_PROFILE_COLUMNS)
       .single())
 
   if (error) throw error
@@ -236,7 +274,7 @@ export const updateUserTimezone = async (userId, timezone = getUserTimezone()) =
 export const getUserProfile = async (userId) => {
   const { data, error } = await trackApiRequest('profile load', () => supabase
       .from('users')
-      .select('*')
+      .select(USER_PROFILE_COLUMNS)
       .eq('id', userId)
       .single())
 
@@ -254,7 +292,7 @@ export const incrementScanCount = async (userId) => {
 
   const { data: existing, error: lookupError } = await trackApiRequest('scan counter lookup', () => supabase
       .from('scan_counters')
-      .select('*')
+      .select('id,scan_count')
       .eq('user_id', userId)
       .eq('date', today)
       .maybeSingle())
@@ -266,7 +304,7 @@ export const incrementScanCount = async (userId) => {
         .from('scan_counters')
         .update({ scan_count: existing.scan_count + 1 })
         .eq('id', existing.id)
-        .select()
+        .select('id,scan_count')
         .single())
 
     if (error) throw error
@@ -275,7 +313,7 @@ export const incrementScanCount = async (userId) => {
     const { data, error } = await trackApiRequest('scan counter create', () => supabase
         .from('scan_counters')
         .insert({ user_id: userId, date: today, scan_count: 1 })
-        .select()
+        .select('id,scan_count')
         .single())
 
     if (error) throw error

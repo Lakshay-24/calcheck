@@ -27,6 +27,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const cameraInputRef = useRef(null)
   const uploadInputRef = useRef(null)
   const loadRequestRef = useRef(0)
+  const scanGateInFlightRef = useRef(false)
   const [meals, setMeals] = useState([])
   const [totals, setTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [goals, setGoals] = useState({ calories: 2500, protein: 150 })
@@ -71,6 +72,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           getLifetimeScanCount(user.id).catch(() => 0)
         ]),
         {
+          dedupeKey: `scan-history:${user.id}:${timezone}`,
           onLongRequest: (message) => setSaveNotice(message)
         }
       )
@@ -187,6 +189,8 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   }
 
   const handleScanRequest = async (source = 'camera') => {
+    if (scanGateInFlightRef.current) return
+
     if (!user?.id) {
       sessionStorage.setItem(POST_LOGIN_SCAN_INTENT_KEY, source)
       setAuthModalOpen(true)
@@ -194,6 +198,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     }
 
     try {
+      scanGateInFlightRef.current = true
       setScanGateLoading(true)
       let [latestProfile, latestScanCount] = await trackApiRequest(
         'access check',
@@ -202,6 +207,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           getLifetimeScanCount(user.id)
         ]),
         {
+          dedupeKey: `access-check:${user.id}`,
           onLongRequest: (message) => setSaveNotice(message)
         }
       )
@@ -227,6 +233,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       setSaveNotice('Could not check scan access. Please try again.')
       setTimeout(() => setSaveNotice(null), 4000)
     } finally {
+      scanGateInFlightRef.current = false
       setScanGateLoading(false)
     }
   }
@@ -235,12 +242,8 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     const file = e.target.files?.[0]
     if (!file) return
 
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      setPendingImage(event.target.result)
-      setCameraOpen(true)
-    }
-    reader.readAsDataURL(file)
+    setPendingImage(file)
+    setCameraOpen(true)
     e.target.value = ''
   }
 

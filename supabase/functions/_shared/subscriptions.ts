@@ -32,6 +32,18 @@ export const createServiceClient = () => {
   })
 }
 
+const PROFILE_COLUMNS = [
+  'id',
+  'email',
+  'subscription_status',
+  'is_pro',
+  'razorpay_subscription_id',
+  'subscription_currency',
+  'billing_country',
+  'current_period_end',
+  'subscription_cancel_at_period_end'
+].join(',')
+
 export const getAuthenticatedUser = async (request: Request) => {
   const authHeader = request.headers.get('authorization') || ''
   const token = authHeader.replace(/^Bearer\s+/i, '')
@@ -231,7 +243,7 @@ export const upsertSubscriptionState = async (
     .from('users')
     .update(userPayload)
     .eq('id', userId)
-    .select()
+    .select(PROFILE_COLUMNS)
     .single()
 
   if (userError) throw userError
