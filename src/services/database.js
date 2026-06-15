@@ -216,39 +216,78 @@ export const calculateWeeklyBreakdown = (mealLogs, timezone = getUserTimezone())
 export const getOrCreateUserProfile = async (userId, email) => {
   const timezone = getUserTimezone()
 
-  const { data: existing } = await trackApiRequest('profile lookup', () => supabase
-      .from('users')
-      .select(USER_PROFILE_COLUMNS)
-      .eq('id', userId)
-      .maybeSingle())
+  console.info('[CalCheck] PROFILE_FETCH_START', {
+    user_id: userId,
+    email,
+    mode: 'get-or-create',
+    timezone
+  })
 
-  if (existing) {
-    if (existing.timezone !== timezone) {
-      return updateUserTimezone(userId, timezone)
+  try {
+    const { data: existing, error: lookupError } = await trackApiRequest('profile lookup', () => supabase
+        .from('users')
+        .select(USER_PROFILE_COLUMNS)
+        .eq('id', userId)
+        .maybeSingle())
+
+    if (lookupError) throw lookupError
+
+    if (existing) {
+      if (existing.timezone !== timezone) {
+        const updated = await updateUserTimezone(userId, timezone)
+        console.info('[CalCheck] PROFILE_FETCH_SUCCESS', {
+          user_id: userId,
+          mode: 'get-or-create',
+          found: true,
+          timezone_updated: true
+        })
+        return updated
+      }
+
+      console.info('[CalCheck] PROFILE_FETCH_SUCCESS', {
+        user_id: userId,
+        mode: 'get-or-create',
+        found: true,
+        timezone_updated: false
+      })
+      return existing
     }
 
-    return existing
+    const { data: created, error } = await trackApiRequest('profile create', () => supabase
+        .from('users')
+        .insert({
+          id: userId,
+          email,
+          goal: 'muscle_gain',
+          calorie_target: 2500,
+          protein_target: 150,
+          subscription_status: 'free',
+          is_pro: false,
+          scans_used_today: 0,
+          timezone,
+          timezone_updated_at: new Date().toISOString()
+        })
+        .select(USER_PROFILE_COLUMNS)
+        .single())
+
+    if (error) throw error
+
+    console.info('[CalCheck] PROFILE_FETCH_SUCCESS', {
+      user_id: userId,
+      mode: 'get-or-create',
+      found: false,
+      created: true
+    })
+    return created
+  } catch (error) {
+    console.error('[CalCheck] PROFILE_FETCH_FAILED', {
+      user_id: userId,
+      mode: 'get-or-create',
+      aborted: error?.name === 'AbortError',
+      error
+    })
+    throw error
   }
-
-  const { data: created, error } = await trackApiRequest('profile create', () => supabase
-      .from('users')
-      .insert({
-        id: userId,
-        email,
-        goal: 'muscle_gain',
-        calorie_target: 2500,
-        protein_target: 150,
-        subscription_status: 'free',
-        is_pro: false,
-        scans_used_today: 0,
-        timezone,
-        timezone_updated_at: new Date().toISOString()
-      })
-      .select(USER_PROFILE_COLUMNS)
-      .single())
-
-  if (error) throw error
-  return created
 }
 
 // Update user profile
@@ -281,17 +320,43 @@ export const updateUserTimezone = async (userId, timezone = getUserTimezone()) =
 
 // Get user profile
 export const getUserProfile = async (userId, options = {}) => {
-  const { data, error } = await trackApiRequest('profile load', () => withAbortSignal(
-    supabase
-      .from('users')
-      .select(USER_PROFILE_COLUMNS)
-      .eq('id', userId)
-      .single(),
-    options.signal
-  ))
+  console.info('[CalCheck] PROFILE_FETCH_START', {
+    user_id: userId,
+    mode: 'load',
+    hasAbortSignal: Boolean(options.signal),
+    signalAborted: Boolean(options.signal?.aborted)
+  })
 
-  if (error) throw error
-  return data
+  try {
+    const { data, error } = await trackApiRequest('profile load', () => withAbortSignal(
+      supabase
+        .from('users')
+        .select(USER_PROFILE_COLUMNS)
+        .eq('id', userId)
+        .single(),
+      options.signal
+    ))
+
+    if (error) throw error
+
+    console.info('[CalCheck] PROFILE_FETCH_SUCCESS', {
+      user_id: userId,
+      mode: 'load',
+      hasProfile: Boolean(data),
+      subscription_status: data?.subscription_status || null,
+      is_pro: Boolean(data?.is_pro)
+    })
+    return data
+  } catch (error) {
+    console.error('[CalCheck] PROFILE_FETCH_FAILED', {
+      user_id: userId,
+      mode: 'load',
+      aborted: error?.name === 'AbortError' || Boolean(options.signal?.aborted),
+      signalAborted: Boolean(options.signal?.aborted),
+      error
+    })
+    throw error
+  }
 }
 
 export const isUserPro = (profile) => {

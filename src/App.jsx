@@ -15,16 +15,34 @@ import InfoPage from './screens/InfoPage'
 import BottomNav from './components/BottomNav'
 
 const profileSetupInFlight = new Set()
+const timedOutSessionFallback = { data: { session: null }, error: null, __calcheckTimedOut: true }
+
+const isExplicitSignedOutEvent = (event) => event === 'SIGNED_OUT'
+
+const logAuthOutcome = (type, details = {}) => {
+  console.info(`[CalCheck] ${type}`, details)
+}
 
 async function ensureUserProfile(user, source = 'unknown') {
   if (!user?.id) return
   if (profileSetupInFlight.has(user.id)) {
+    console.info('[CalCheck] PROFILE_FETCH_BLOCKED_BY_DEDUPE', {
+      source,
+      user_id: user.id,
+      layer: 'profileSetupInFlight'
+    })
     console.info('[CalCheck] profile setup deduped', { source, user_id: user.id })
     return
   }
 
   try {
     profileSetupInFlight.add(user.id)
+    console.info('[CalCheck] PROFILE_FETCH_START', {
+      source,
+      user_id: user.id,
+      email: user.email,
+      mode: 'ensure-user-profile'
+    })
     await trackStartupStep(
       'profile fetch',
       () => getOrCreateUserProfile(user.id, user.email),
@@ -34,7 +52,18 @@ async function ensureUserProfile(user, source = 'unknown') {
         fallbackValue: null
       }
     )
+    console.info('[CalCheck] PROFILE_FETCH_SUCCESS', {
+      source,
+      user_id: user.id,
+      mode: 'ensure-user-profile'
+    })
   } catch (error) {
+    console.error('[CalCheck] PROFILE_FETCH_FAILED', {
+      source,
+      user_id: user.id,
+      mode: 'ensure-user-profile',
+      error
+    })
     console.error('Profile setup error:', { source, error })
   } finally {
     profileSetupInFlight.delete(user.id)
@@ -52,8 +81,13 @@ function App() {
   const authCheckRef = useRef(0)
   const lastResumeAtRef = useRef(0)
   const loadingRef = useRef(loading)
+  const userRef = useRef(user)
   const startupStartedAtRef = useRef(Date.now())
   const appReadyLoggedRef = useRef(false)
+
+  useEffect(() => {
+    userRef.current = user
+  }, [user])
 
   useEffect(() => {
     loadingRef.current = loading
@@ -79,6 +113,12 @@ function App() {
 
     try {
       console.info('[CalCheck] data refresh started', { source, target: 'auth' })
+      console.info('[CalCheck] USER_FETCH_START', {
+        source,
+        checkId,
+        visibilityState: document.visibilityState,
+        online: navigator.onLine
+      })
       const sessionResult = await trackStartupStep(
         'session restore',
         () => trackApiRequest(
@@ -89,9 +129,46 @@ function App() {
         {
           blocksRender: source === 'startup',
           timeoutMs: 5000,
-          fallbackValue: { data: { session: null }, error: null }
+          fallbackValue: timedOutSessionFallback
         }
       )
+      if (sessionResult?.__calcheckTimedOut) {
+        logAuthOutcome('AUTH_TIMEOUT', {
+          source,
+          checkId,
+          stage: 'session restore',
+          preservedUserId: userRef.current?.id || null
+        })
+        console.error('[CalCheck] USER_FETCH_FAILED', {
+          source,
+          checkId,
+          stage: 'session restore',
+          reason: 'timeout-fallback'
+        })
+        if (userRef.current?.id) {
+          setLoading(false)
+          console.info('[CalCheck] data refresh completed', {
+            source,
+            target: 'auth',
+            preservedUser: true,
+            reason: 'session-restore-timeout'
+          })
+          return
+        }
+      }
+      if (sessionResult?.error) {
+        logAuthOutcome('AUTH_NETWORK_ERROR', {
+          source,
+          checkId,
+          stage: 'session restore',
+          preservedUserId: userRef.current?.id || null,
+          error: sessionResult.error
+        })
+        if (userRef.current?.id) {
+          setLoading(false)
+          return
+        }
+      }
       const session = sessionResult?.data?.session || null
       let activeSession = session
 
@@ -106,25 +183,85 @@ function App() {
           {
             blocksRender: source === 'startup',
             timeoutMs: 5000,
-            fallbackValue: { data: { session: null }, error: null }
+            fallbackValue: timedOutSessionFallback
           }
         )
         const { data, error } = refreshResult || {}
+        if (refreshResult?.__calcheckTimedOut) {
+          logAuthOutcome('AUTH_TIMEOUT', {
+            source,
+            checkId,
+            stage: 'session refresh',
+            preservedUserId: session.user?.id || userRef.current?.id || null
+          })
+          console.error('[CalCheck] USER_FETCH_FAILED', {
+            source,
+            checkId,
+            stage: 'session refresh',
+            reason: 'timeout-fallback',
+            previousUserId: session.user?.id || null
+          })
+          activeSession = session
+        }
         if (error) {
+          logAuthOutcome('AUTH_NETWORK_ERROR', {
+            source,
+            checkId,
+            stage: 'session refresh',
+            preservedUserId: session.user?.id || userRef.current?.id || null,
+            error
+          })
           console.warn('[CalCheck] session refresh skipped or failed', error)
         } else if (data?.session) {
           activeSession = data.session
         }
       }
 
-      if (authCheckRef.current !== checkId) return
+      if (authCheckRef.current !== checkId) {
+        console.warn('[CalCheck] USER_FETCH_FAILED', {
+          source,
+          checkId,
+          stage: 'auth commit',
+          reason: 'stale-auth-check',
+          currentCheckId: authCheckRef.current
+        })
+        return
+      }
 
       const sessionUser = activeSession?.user || null
+      if (!sessionUser) {
+        logAuthOutcome('AUTH_SIGNED_OUT', {
+          source,
+          checkId,
+          stage: 'session restore',
+          previousUserId: userRef.current?.id || null
+        })
+      }
+      console.info('[CalCheck] USER_FETCH_SUCCESS', {
+        source,
+        checkId,
+        hasSession: Boolean(activeSession),
+        hasUser: Boolean(sessionUser),
+        user_id: sessionUser?.id || null,
+        expires_at: activeSession?.expires_at || null
+      })
       setUser(sessionUser)
       setLoading(false)
       ensureUserProfile(sessionUser, source)
       console.info('[CalCheck] data refresh completed', { source, target: 'auth' })
     } catch (error) {
+      logAuthOutcome('AUTH_NETWORK_ERROR', {
+        source,
+        checkId,
+        stage: 'auth check',
+        preservedUserId: userRef.current?.id || null,
+        error
+      })
+      console.error('[CalCheck] USER_FETCH_FAILED', {
+        source,
+        checkId,
+        error
+      })
       console.error('[CalCheck] Auth check error:', error)
     } finally {
       if (authCheckRef.current === checkId) {
@@ -139,6 +276,22 @@ function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.info('[CalCheck] auth state changed', { event })
       const sessionUser = session?.user || null
+      if (!sessionUser && !isExplicitSignedOutEvent(event) && userRef.current?.id) {
+        logAuthOutcome('AUTH_NETWORK_ERROR', {
+          source: `auth-${event}`,
+          stage: 'auth listener',
+          reason: 'null-session-without-signed-out-event',
+          preservedUserId: userRef.current.id
+        })
+        return
+      }
+      if (!sessionUser && isExplicitSignedOutEvent(event)) {
+        logAuthOutcome('AUTH_SIGNED_OUT', {
+          source: `auth-${event}`,
+          stage: 'auth listener',
+          previousUserId: userRef.current?.id || null
+        })
+      }
       setUser(sessionUser)
       if (sessionUser) {
         ensureUserProfile(sessionUser, `auth-${event}`)

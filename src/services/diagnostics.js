@@ -220,6 +220,13 @@ export const trackStartupStep = async (
 export const trackApiRequest = async (requestName, requestFactory, options = {}) => {
   const dedupeKey = options.dedupeKey || null
   if (dedupeKey && inFlightRequests.has(dedupeKey)) {
+    if (options.profileFetchBlockedByDedupe) {
+      console.info('[CalCheck] PROFILE_FETCH_BLOCKED_BY_DEDUPE', {
+        requestName,
+        dedupeKey,
+        reason: 'enclosing-request-deduped'
+      })
+    }
     console.info('[CalCheck] API request deduped', { requestName, dedupeKey })
     recordLifecycleEvent('duplicate request deduped', { requestName, dedupeKey })
     return inFlightRequests.get(dedupeKey)

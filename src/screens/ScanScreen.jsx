@@ -85,6 +85,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         ]),
         {
           dedupeKey: `scan-history:${user.id}:${timezone}`,
+          profileFetchBlockedByDedupe: true,
           onLongRequest: (message) => setSaveNotice(message)
         }
       )
@@ -221,6 +222,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         ]),
         {
           dedupeKey: `access-check:${user.id}`,
+          profileFetchBlockedByDedupe: true,
           onLongRequest: (message) => setSaveNotice(message)
         }
       )

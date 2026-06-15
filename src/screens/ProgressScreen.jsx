@@ -77,6 +77,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
           ]),
           {
             dedupeKey: `progress-history:${user.id}:${timezone}:${lifecycleGeneration}`,
+            profileFetchBlockedByDedupe: true,
             onLongRequest: (message) => setSlowNotice(message)
           }
         ),
