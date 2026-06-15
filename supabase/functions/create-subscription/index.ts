@@ -24,22 +24,42 @@ Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
   if (request.method !== 'POST') return jsonResponse({ error: 'Method not allowed' }, 405)
 
+  const functionStartedAt = performance.now()
+  const timings: Record<string, number> = {}
+  let checkoutFlowId = 'unknown'
+  const markTiming = (name: string, startedAt: number) => {
+    timings[name] = Math.round(performance.now() - startedAt)
+  }
+
   try {
+    const requestBody = await request.json().catch(() => ({})) as Record<string, unknown>
+    checkoutFlowId = typeof requestBody.checkout_flow_id === 'string'
+      ? requestBody.checkout_flow_id
+      : checkoutFlowId
+
+    const authStartedAt = performance.now()
     const user = await getAuthenticatedUser(request)
+    markTiming('auth_user_lookup_ms', authStartedAt)
+
+    const clientStartedAt = performance.now()
     const supabase = createServiceClient()
+    markTiming('service_client_create_ms', clientStartedAt)
     const country = detectCountry(request)
     const isIndia = country === 'IN'
     const planId = isIndia ? INR_PLAN_ID : USD_PLAN_ID
     const currency = isIndia ? 'INR' : 'USD'
     const amountMinor = isIndia ? 6900 : 199
 
+    const profileLookupStartedAt = performance.now()
     let { data: profile } = await supabase
       .from('users')
       .select(PROFILE_COLUMNS)
       .eq('id', user.id)
       .maybeSingle()
+    markTiming('profile_lookup_ms', profileLookupStartedAt)
 
     if (!profile) {
+      const profileCreateStartedAt = performance.now()
       const { data: created, error: createError } = await supabase
         .from('users')
         .insert({
@@ -60,12 +80,16 @@ Deno.serve(async (request) => {
 
       if (createError) throw createError
       profile = created
+      markTiming('profile_create_ms', profileCreateStartedAt)
     }
 
     if (profile?.is_pro && profile?.subscription_status === 'active') {
-      return jsonResponse({ already_pro: true, profile })
+      timings.total_ms = Math.round(performance.now() - functionStartedAt)
+      console.info('create-subscription timing', { checkoutFlowId, alreadyPro: true, timings })
+      return jsonResponse({ already_pro: true, profile, timings })
     }
 
+    const razorpayStartedAt = performance.now()
     const subscription = await razorpayRequest('/subscriptions', {
       method: 'POST',
       body: JSON.stringify({
@@ -81,9 +105,11 @@ Deno.serve(async (request) => {
         }
       })
     })
+    markTiming('razorpay_subscription_create_ms', razorpayStartedAt)
 
     const now = new Date().toISOString()
 
+    const subscriptionWriteStartedAt = performance.now()
     const { error: subscriptionError } = await supabase
       .from('subscriptions')
       .upsert({
@@ -101,7 +127,9 @@ Deno.serve(async (request) => {
       }, { onConflict: 'provider_subscription_id' })
 
     if (subscriptionError) throw subscriptionError
+    markTiming('subscription_db_write_ms', subscriptionWriteStartedAt)
 
+    const profileUpdateStartedAt = performance.now()
     const { data: updatedProfile, error: userError } = await supabase
       .from('users')
       .update({
@@ -120,6 +148,9 @@ Deno.serve(async (request) => {
       .single()
 
     if (userError) throw userError
+    markTiming('profile_db_update_ms', profileUpdateStartedAt)
+    timings.total_ms = Math.round(performance.now() - functionStartedAt)
+    console.info('create-subscription timing', { checkoutFlowId, timings })
 
     return jsonResponse({
       key_id: Deno.env.get('RAZORPAY_KEY_ID'),
@@ -130,12 +161,15 @@ Deno.serve(async (request) => {
       billing_country: country,
       name: 'CalCheck AI',
       description: 'CalCheck Pro Subscription',
-      profile: updatedProfile
+      profile: updatedProfile,
+      timings
     })
   } catch (error) {
-    console.error('create-subscription failed', error)
+    timings.total_ms = Math.round(performance.now() - functionStartedAt)
+    console.error('create-subscription failed', { checkoutFlowId, timings, error })
     return jsonResponse({
-      error: error instanceof Error ? error.message : 'Could not create subscription'
+      error: error instanceof Error ? error.message : 'Could not create subscription',
+      timings
     }, 400)
   }
 })

@@ -16,7 +16,7 @@ import {
   syncSubscription
 } from '../services/subscriptions'
 import { signInWithGoogle } from '../services/supabase'
-import { trackApiRequest, trackStartupStep } from '../services/diagnostics'
+import { recordPerformanceMetric, trackApiRequest, trackStartupStep } from '../services/diagnostics'
 import { formatLocalTime, formatLocalWeekday, getUserTimezone } from '../utils/timezone'
 import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
 
@@ -47,6 +47,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const [pendingPaywallScanSource, setPendingPaywallScanSource] = useState(null)
   const [proSuccessVisible, setProSuccessVisible] = useState(false)
   const [upgradeError, setUpgradeError] = useState(null)
+  const [upgradeStatus, setUpgradeStatus] = useState(null)
   const timezone = getUserTimezone()
   const pro = isUserPro(profile)
 
@@ -310,11 +311,20 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     try {
       setUpgradeLoading(true)
       setUpgradeError(null)
-      const checkoutPayload = await createSubscription()
+      setUpgradeStatus('Preparing secure checkout...')
+      const flowStartedAt = performance.now()
+      const flowId = `paywall-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      recordPerformanceMetric('razorpay checkout timing', {
+        step: 'UPGRADE_BUTTON_PRESSED',
+        flowId,
+        elapsedMs: 0
+      })
+      const checkoutPayload = await createSubscription({ flowId, flowStartedAt })
 
       if (checkoutPayload?.already_pro) {
         setProfile(checkoutPayload.profile)
         setPaywallOpen(false)
+        setUpgradeStatus(null)
         setProSuccessVisible(true)
         setTimeout(() => setProSuccessVisible(false), 5000)
         continuePendingScan()
@@ -325,14 +335,18 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         keyId: checkoutPayload.key_id,
         subscriptionId: checkoutPayload.subscription_id,
         user,
+        flowId,
+        flowStartedAt,
         onAuthorized: async () => {
           setUpgradeError(null)
           setUpgradeLoading(true)
+          setUpgradeStatus('Confirming subscription...')
 
           try {
             const synced = await waitForProConfirmation()
             setProfile(synced)
             setPaywallOpen(false)
+            setUpgradeStatus(null)
             setProSuccessVisible(true)
             setTimeout(() => setProSuccessVisible(false), 5000)
             continuePendingScan()
@@ -343,6 +357,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           }
         },
         onDismiss: () => {
+          setUpgradeStatus(null)
           setUpgradeLoading(false)
         }
       })
@@ -350,6 +365,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       console.error('Upgrade error:', error)
       setProfile(previousProfile)
       setUpgradeError(error?.message || 'Could not activate Pro. Please try again.')
+      setUpgradeStatus(null)
     } finally {
       setUpgradeLoading(false)
     }
@@ -400,6 +416,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         isOpen={paywallOpen}
         isLoading={upgradeLoading}
         error={upgradeError}
+        status={upgradeStatus}
         onClose={() => setPaywallOpen(false)}
         onUpgrade={handleUpgrade}
       />
@@ -671,7 +688,7 @@ function AuthModal({ isOpen, isLoading, onClose, onSignIn }) {
   )
 }
 
-function PaywallModal({ isOpen, isLoading, error, onClose, onUpgrade }) {
+function PaywallModal({ isOpen, isLoading, error, status, onClose, onUpgrade }) {
   if (!isOpen) return null
 
   return (
@@ -712,6 +729,12 @@ function PaywallModal({ isOpen, isLoading, error, onClose, onUpgrade }) {
               <p className="text-sm font-semibold text-red-800">{error}</p>
             </div>
           )}
+
+          {status && !error && (
+            <div className="mt-4 rounded-2xl bg-brand-50 border border-brand-300/60 p-3">
+              <p className="text-sm font-semibold text-brand-700">{status}</p>
+            </div>
+          )}
         </div>
 
         <button
@@ -721,7 +744,7 @@ function PaywallModal({ isOpen, isLoading, error, onClose, onUpgrade }) {
           className="mt-6 w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 disabled:opacity-70 disabled:cursor-not-allowed text-brand-900 rounded-xl py-3 font-bold flex items-center justify-center gap-2"
         >
           {isLoading && <Loader2 size={20} className="animate-spin" />}
-          <span>{isLoading ? 'Opening Razorpay...' : 'Upgrade to Pro'}</span>
+          <span>{isLoading ? 'Preparing secure checkout...' : 'Upgrade to Pro'}</span>
         </button>
 
         <button

@@ -5,6 +5,7 @@ import { supabase } from './services/supabase.js'
 import { getOrCreateUserProfile } from './services/database'
 import { recordStartupStep, trackApiRequest, trackStartupStep } from './services/diagnostics'
 import { abortLifecycleRequests, recordAppLifecycleEvent } from './services/lifecycle'
+import { preloadRazorpayCheckout } from './services/subscriptions'
 import './index.css'
 
 import ScanScreen from './screens/ScanScreen'
@@ -16,11 +17,47 @@ import BottomNav from './components/BottomNav'
 
 const profileSetupInFlight = new Set()
 const timedOutSessionFallback = { data: { session: null }, error: null, __calcheckTimedOut: true }
+const IOS_BOOT_SESSION_KEY = 'calcheck-ios-boot-session'
+const IOS_LAST_BOOT_KEY = 'calcheck-ios-last-boot'
+const STARTUP_SESSION_RESTORE_TIMEOUT_MS = 900
+const RESUME_SESSION_RESTORE_TIMEOUT_MS = 5000
 
 const isExplicitSignedOutEvent = (event) => event === 'SIGNED_OUT'
 
 const logAuthOutcome = (type, details = {}) => {
   console.info(`[CalCheck] ${type}`, details)
+}
+
+const isIosStandalonePwa = () => {
+  if (typeof navigator === 'undefined' || typeof window === 'undefined') return false
+
+  const userAgent = navigator.userAgent || ''
+  const isIos = /iPad|iPhone|iPod/.test(userAgent) || (
+    navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+  )
+
+  return isIos && (
+    window.navigator.standalone === true ||
+    window.matchMedia?.('(display-mode: standalone)')?.matches
+  )
+}
+
+const detectIosWebviewRestart = () => {
+  if (!isIosStandalonePwa()) return false
+  if (typeof localStorage === 'undefined' || typeof sessionStorage === 'undefined') return false
+
+  try {
+    const hadPreviousBoot = Boolean(localStorage.getItem(IOS_LAST_BOOT_KEY))
+    const hasCurrentSession = Boolean(sessionStorage.getItem(IOS_BOOT_SESSION_KEY))
+    const bootId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+    sessionStorage.setItem(IOS_BOOT_SESSION_KEY, bootId)
+    localStorage.setItem(IOS_LAST_BOOT_KEY, bootId)
+
+    return hadPreviousBoot && !hasCurrentSession
+  } catch {
+    return false
+  }
 }
 
 async function ensureUserProfile(user, source = 'unknown') {
@@ -73,6 +110,7 @@ async function ensureUserProfile(user, source = 'unknown') {
 function App() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [authRestorePending, setAuthRestorePending] = useState(true)
   const [resumeSignal, setResumeSignal] = useState(0)
   const [appRecoveryKey, setAppRecoveryKey] = useState(0)
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(
@@ -104,35 +142,155 @@ function App() {
         blocksRender: true,
         timeoutMs: 5000
       })
+
+      window.setTimeout(() => {
+        preloadRazorpayCheckout('app-ready-idle')
+      }, 1500)
     }
   }, [loading])
 
   const revalidateAuth = useCallback(async (source = 'startup') => {
     const checkId = authCheckRef.current + 1
     authCheckRef.current = checkId
+    const isStartup = source === 'startup'
+    const restoreTimeoutMs = isStartup
+      ? STARTUP_SESSION_RESTORE_TIMEOUT_MS
+      : RESUME_SESSION_RESTORE_TIMEOUT_MS
+
+    const commitSessionResult = async (sessionResult, commitSource, { allowRefresh = true } = {}) => {
+      if (authCheckRef.current !== checkId) {
+        console.warn('[CalCheck] USER_FETCH_FAILED', {
+          source: commitSource,
+          checkId,
+          stage: 'auth commit',
+          reason: 'stale-auth-check',
+          currentCheckId: authCheckRef.current
+        })
+        return
+      }
+
+      if (sessionResult?.error) {
+        logAuthOutcome('SESSION_RESTORE_FAILED', {
+          source: commitSource,
+          checkId,
+          preservedUserId: userRef.current?.id || null,
+          error: sessionResult.error
+        })
+        logAuthOutcome('AUTH_NETWORK_ERROR', {
+          source: commitSource,
+          checkId,
+          stage: 'session restore',
+          preservedUserId: userRef.current?.id || null,
+          error: sessionResult.error
+        })
+        setLoading(false)
+        return
+      }
+
+      const session = sessionResult?.data?.session || null
+      let activeSession = session
+
+      if (session && allowRefresh) {
+        const refreshResult = await trackStartupStep(
+          'session refresh',
+          () => trackApiRequest(
+            'auth session refresh',
+            () => supabase.auth.refreshSession(),
+            { dedupeKey: 'auth-session-refresh' }
+          ),
+          {
+            blocksRender: false,
+            timeoutMs: RESUME_SESSION_RESTORE_TIMEOUT_MS,
+            fallbackValue: timedOutSessionFallback
+          }
+        )
+        const { data, error } = refreshResult || {}
+        if (refreshResult?.__calcheckTimedOut) {
+          logAuthOutcome('AUTH_TIMEOUT', {
+            source: commitSource,
+            checkId,
+            stage: 'session refresh',
+            preservedUserId: session.user?.id || userRef.current?.id || null
+          })
+          activeSession = session
+        }
+        if (error) {
+          logAuthOutcome('AUTH_NETWORK_ERROR', {
+            source: commitSource,
+            checkId,
+            stage: 'session refresh',
+            preservedUserId: session.user?.id || userRef.current?.id || null,
+            error
+          })
+          console.warn('[CalCheck] session refresh skipped or failed', error)
+        } else if (data?.session) {
+          activeSession = data.session
+        }
+      }
+
+      if (authCheckRef.current !== checkId) return
+
+      const sessionUser = activeSession?.user || null
+      if (!sessionUser) {
+        logAuthOutcome('AUTH_SIGNED_OUT', {
+          source: commitSource,
+          checkId,
+          stage: 'session restore',
+          previousUserId: userRef.current?.id || null,
+          reason: 'confirmed-missing-session'
+        })
+      }
+      console.info('[CalCheck] USER_FETCH_SUCCESS', {
+        source: commitSource,
+        checkId,
+        hasSession: Boolean(activeSession),
+        hasUser: Boolean(sessionUser),
+        user_id: sessionUser?.id || null,
+        expires_at: activeSession?.expires_at || null
+      })
+      logAuthOutcome('SESSION_RESTORE_SUCCESS', {
+        source: commitSource,
+        checkId,
+        hasSession: Boolean(activeSession),
+        user_id: sessionUser?.id || null
+      })
+      setUser(sessionUser)
+      setAuthRestorePending(false)
+      setLoading(false)
+      ensureUserProfile(sessionUser, commitSource)
+      console.info('[CalCheck] data refresh completed', { source: commitSource, target: 'auth' })
+    }
 
     try {
       console.info('[CalCheck] data refresh started', { source, target: 'auth' })
+      logAuthOutcome('SESSION_RESTORE_START', { source, checkId, timeoutMs: restoreTimeoutMs })
       console.info('[CalCheck] USER_FETCH_START', {
         source,
         checkId,
         visibilityState: document.visibilityState,
         online: navigator.onLine
       })
+      const restorePromise = trackApiRequest(
+        'auth session load',
+        () => supabase.auth.getSession(),
+        { dedupeKey: 'auth-session-load' }
+      )
       const sessionResult = await trackStartupStep(
         'session restore',
-        () => trackApiRequest(
-          'auth session load',
-          () => supabase.auth.getSession(),
-          { dedupeKey: 'auth-session-load' }
-        ),
+        () => restorePromise,
         {
-          blocksRender: source === 'startup',
-          timeoutMs: 5000,
+          blocksRender: isStartup,
+          timeoutMs: restoreTimeoutMs,
           fallbackValue: timedOutSessionFallback
         }
       )
       if (sessionResult?.__calcheckTimedOut) {
+        logAuthOutcome('SESSION_RESTORE_TIMEOUT', {
+          source,
+          checkId,
+          stage: 'session restore',
+          preservedUserId: userRef.current?.id || null
+        })
         logAuthOutcome('AUTH_TIMEOUT', {
           source,
           checkId,
@@ -145,7 +303,20 @@ function App() {
           stage: 'session restore',
           reason: 'timeout-fallback'
         })
+        restorePromise
+          .then((lateResult) => commitSessionResult(lateResult, `${source}-late-session`, {
+            allowRefresh: !isStartup
+          }))
+          .catch((error) => {
+            logAuthOutcome('SESSION_RESTORE_FAILED', {
+              source: `${source}-late-session`,
+              checkId,
+              preservedUserId: userRef.current?.id || null,
+              error
+            })
+          })
         if (userRef.current?.id) {
+          setAuthRestorePending(false)
           setLoading(false)
           console.info('[CalCheck] data refresh completed', {
             source,
@@ -155,101 +326,18 @@ function App() {
           })
           return
         }
-      }
-      if (sessionResult?.error) {
-        logAuthOutcome('AUTH_NETWORK_ERROR', {
-          source,
-          checkId,
-          stage: 'session restore',
-          preservedUserId: userRef.current?.id || null,
-          error: sessionResult.error
-        })
-        if (userRef.current?.id) {
-          setLoading(false)
-          return
-        }
-      }
-      const session = sessionResult?.data?.session || null
-      let activeSession = session
-
-      if (session) {
-        const refreshResult = await trackStartupStep(
-          'session refresh',
-          () => trackApiRequest(
-            'auth session refresh',
-            () => supabase.auth.refreshSession(),
-            { dedupeKey: 'auth-session-refresh' }
-          ),
-          {
-            blocksRender: source === 'startup',
-            timeoutMs: 5000,
-            fallbackValue: timedOutSessionFallback
-          }
-        )
-        const { data, error } = refreshResult || {}
-        if (refreshResult?.__calcheckTimedOut) {
-          logAuthOutcome('AUTH_TIMEOUT', {
-            source,
-            checkId,
-            stage: 'session refresh',
-            preservedUserId: session.user?.id || userRef.current?.id || null
-          })
-          console.error('[CalCheck] USER_FETCH_FAILED', {
-            source,
-            checkId,
-            stage: 'session refresh',
-            reason: 'timeout-fallback',
-            previousUserId: session.user?.id || null
-          })
-          activeSession = session
-        }
-        if (error) {
-          logAuthOutcome('AUTH_NETWORK_ERROR', {
-            source,
-            checkId,
-            stage: 'session refresh',
-            preservedUserId: session.user?.id || userRef.current?.id || null,
-            error
-          })
-          console.warn('[CalCheck] session refresh skipped or failed', error)
-        } else if (data?.session) {
-          activeSession = data.session
-        }
-      }
-
-      if (authCheckRef.current !== checkId) {
-        console.warn('[CalCheck] USER_FETCH_FAILED', {
-          source,
-          checkId,
-          stage: 'auth commit',
-          reason: 'stale-auth-check',
-          currentCheckId: authCheckRef.current
-        })
+        setAuthRestorePending(true)
+        setLoading(false)
         return
       }
-
-      const sessionUser = activeSession?.user || null
-      if (!sessionUser) {
-        logAuthOutcome('AUTH_SIGNED_OUT', {
-          source,
-          checkId,
-          stage: 'session restore',
-          previousUserId: userRef.current?.id || null
-        })
-      }
-      console.info('[CalCheck] USER_FETCH_SUCCESS', {
+      await commitSessionResult(sessionResult, source, { allowRefresh: !isStartup })
+    } catch (error) {
+      logAuthOutcome('SESSION_RESTORE_FAILED', {
         source,
         checkId,
-        hasSession: Boolean(activeSession),
-        hasUser: Boolean(sessionUser),
-        user_id: sessionUser?.id || null,
-        expires_at: activeSession?.expires_at || null
+        preservedUserId: userRef.current?.id || null,
+        error
       })
-      setUser(sessionUser)
-      setLoading(false)
-      ensureUserProfile(sessionUser, source)
-      console.info('[CalCheck] data refresh completed', { source, target: 'auth' })
-    } catch (error) {
       logAuthOutcome('AUTH_NETWORK_ERROR', {
         source,
         checkId,
@@ -263,6 +351,9 @@ function App() {
         error
       })
       console.error('[CalCheck] Auth check error:', error)
+      if (!userRef.current?.id) {
+        setAuthRestorePending(true)
+      }
     } finally {
       if (authCheckRef.current === checkId) {
         setLoading(false)
@@ -271,17 +362,28 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (detectIosWebviewRestart()) {
+      logAuthOutcome('IOS_WEBVIEW_RESTART_DETECTED', {
+        source: 'startup',
+        visibilityState: document.visibilityState
+      })
+      recordAppLifecycleEvent('IOS_WEBVIEW_RESTART_DETECTED', {
+        source: 'startup',
+        visibilityState: document.visibilityState
+      })
+    }
+
     revalidateAuth('startup')
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.info('[CalCheck] auth state changed', { event })
       const sessionUser = session?.user || null
-      if (!sessionUser && !isExplicitSignedOutEvent(event) && userRef.current?.id) {
+      if (!sessionUser && !isExplicitSignedOutEvent(event)) {
         logAuthOutcome('AUTH_NETWORK_ERROR', {
           source: `auth-${event}`,
           stage: 'auth listener',
           reason: 'null-session-without-signed-out-event',
-          preservedUserId: userRef.current.id
+          preservedUserId: userRef.current?.id || null
         })
         return
       }
@@ -291,9 +393,11 @@ function App() {
           stage: 'auth listener',
           previousUserId: userRef.current?.id || null
         })
+        setAuthRestorePending(false)
       }
       setUser(sessionUser)
       if (sessionUser) {
+        setAuthRestorePending(false)
         ensureUserProfile(sessionUser, `auth-${event}`)
       }
     })
@@ -416,16 +520,38 @@ function App() {
               element={
                 user
                   ? <ProgressScreen key={`progress-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} />
-                  : <Navigate to="/" />
+                  : authRestorePending
+                    ? <AuthRecoveryScreen />
+                    : <Navigate to="/" />
               }
             />
-            <Route path="/profile" element={user ? <ProfileScreen user={user} /> : <Navigate to="/" />} />
+            <Route
+              path="/profile"
+              element={
+                user
+                  ? <ProfileScreen user={user} />
+                  : authRestorePending
+                    ? <AuthRecoveryScreen />
+                    : <Navigate to="/" />
+              }
+            />
           </Routes>
         </div>
 
         {user && <BottomNav />}
       </div>
     </Router>
+  )
+}
+
+function AuthRecoveryScreen() {
+  return (
+    <div className="h-full w-full flex items-center justify-center bg-white px-6">
+      <div className="text-center">
+        <div className="w-10 h-10 border-3 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+        <p className="text-sm font-semibold text-gray-700">Restoring session...</p>
+      </div>
+    </div>
   )
 }
 

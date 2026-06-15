@@ -9,7 +9,7 @@ import {
   openRazorpaySubscriptionCheckout,
   syncSubscription
 } from '../services/subscriptions'
-import { getDiagnosticsSnapshot } from '../services/diagnostics'
+import { getDiagnosticsSnapshot, recordPerformanceMetric } from '../services/diagnostics'
 import { signOut } from '../services/supabase'
 
 export default function ProfileScreen({ user }) {
@@ -76,9 +76,16 @@ export default function ProfileScreen({ user }) {
     try {
       setSubscriptionLoading(true)
       setSubscriptionError(null)
-      setSubscriptionNotice(null)
+      setSubscriptionNotice('Preparing secure checkout...')
+      const flowStartedAt = performance.now()
+      const flowId = `profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      recordPerformanceMetric('razorpay checkout timing', {
+        step: 'UPGRADE_BUTTON_PRESSED',
+        flowId,
+        elapsedMs: 0
+      })
 
-      const checkoutPayload = await createSubscription()
+      const checkoutPayload = await createSubscription({ flowId, flowStartedAt })
       if (checkoutPayload?.already_pro) {
         setProfile(checkoutPayload.profile)
         setSubscriptionNotice('CalCheck Pro is active.')
@@ -89,6 +96,8 @@ export default function ProfileScreen({ user }) {
         keyId: checkoutPayload.key_id,
         subscriptionId: checkoutPayload.subscription_id,
         user,
+        flowId,
+        flowStartedAt,
         onAuthorized: async () => {
           setSubscriptionLoading(true)
           setSubscriptionNotice('Payment authorized. Confirming subscription...')
@@ -103,11 +112,15 @@ export default function ProfileScreen({ user }) {
             setSubscriptionLoading(false)
           }
         },
-        onDismiss: () => setSubscriptionLoading(false)
+        onDismiss: () => {
+          setSubscriptionNotice(null)
+          setSubscriptionLoading(false)
+        }
       })
     } catch (error) {
       console.error('Subscription checkout error:', error)
       setSubscriptionError(error?.message || 'Could not start subscription.')
+      setSubscriptionNotice(null)
     } finally {
       setSubscriptionLoading(false)
     }
@@ -580,7 +593,7 @@ function SubscriptionCard({ profile, loading, error, notice, onSubscribe, onMana
             className="w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 disabled:opacity-70 disabled:cursor-not-allowed text-brand-900 font-bold py-3 px-5 rounded-2xl flex items-center justify-center gap-2 shadow-brand"
           >
             {loading && <Loader2 size={18} className="animate-spin" />}
-            <span>{loading ? 'Opening Razorpay...' : 'Upgrade to Pro'}</span>
+            <span>{loading ? 'Preparing secure checkout...' : 'Upgrade to Pro'}</span>
           </button>
         ) : (
           <>
