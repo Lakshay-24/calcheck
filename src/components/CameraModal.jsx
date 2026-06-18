@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { X } from 'lucide-react'
+import { Loader2, X } from 'lucide-react'
 import { analyzeFood } from '../services/ai'
 import { saveMealLog, getOrCreateUserProfile } from '../services/database'
-import { trackApiRequest } from '../services/diagnostics'
+import { recordPerformanceMetric, trackApiRequest } from '../services/diagnostics'
 import { signInWithGoogle } from '../services/supabase'
 import { prepareImageForAnalysis, revokeImagePreview } from '../utils/imagePerformance'
 import AnalysisScreen from './AnalysisScreen'
 import ResultsScreen from './ResultsScreen'
 
 const PENDING_MEAL_KEY = 'calcheck-pending-meal'
+const PHOTO_COMPRESSION_TIMEOUT_MS = 8000
+const ANALYSIS_TIMEOUT_MS = 30000
 
 export const getPendingMeal = () => {
   try {
@@ -42,12 +44,15 @@ export default function CameraModal({
   const [isSaving, setIsSaving] = useState(false)
   const [cameraError, setCameraError] = useState(null)
   const [requestNotice, setRequestNotice] = useState(null)
+  const [flowStatus, setFlowStatus] = useState(null)
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const streamRef = useRef(null)
   const analysisRequestRef = useRef(0)
   const uploadImageRef = useRef(null)
   const previewUrlRef = useRef(null)
+  const retryImageSourceRef = useRef(null)
+  const retrySourceLabelRef = useRef(null)
 
   useEffect(() => {
     if (!isOpen) {
@@ -61,6 +66,7 @@ export default function CameraModal({
     setError(null)
     setRequestNotice(null)
     setCameraError(null)
+    setFlowStatus(null)
     setStage('camera')
     setCapturedImage(null)
     setAnalysisResult(null)
@@ -128,42 +134,115 @@ export default function CameraModal({
   const prepareAndAnalyzePhoto = async (imageSource, sourceLabel) => {
     const requestId = analysisRequestRef.current + 1
     analysisRequestRef.current = requestId
+    retryImageSourceRef.current = imageSource
+    retrySourceLabelRef.current = sourceLabel
+    let currentPhase = 'photo-compression'
 
     try {
       setError(null)
       setRequestNotice(null)
-      setStage('analysis')
-      const preparedImage = await prepareImageForAnalysis(imageSource, sourceLabel)
+      setFlowStatus('Preparing photo...')
+      setStage('preparing')
+      console.info('[CalCheck] CAMERA_OK_TAPPED', { source: sourceLabel })
+      console.info('[CalCheck] PHOTO_COMPRESSION_START', { source: sourceLabel })
+      recordPerformanceMetric('CAMERA_OK_TAPPED', { source: sourceLabel })
+      recordPerformanceMetric('PHOTO_COMPRESSION_START', { source: sourceLabel })
+
+      const preparedImage = await withTimeout(
+        prepareImageForAnalysis(imageSource, sourceLabel),
+        PHOTO_COMPRESSION_TIMEOUT_MS,
+        'Preparing photo took too long. Please retry or retake the photo.'
+      )
 
       if (analysisRequestRef.current !== requestId) {
         revokeImagePreview(preparedImage.previewUrl)
+        recordPerformanceMetric('ANALYSIS_FLOW_ABORTED', {
+          source: sourceLabel,
+          stage: 'photo-compression',
+          reason: 'stale-request'
+        })
         return
       }
 
       uploadImageRef.current = preparedImage.dataUrl
       setPreviewUrl(preparedImage.previewUrl)
+      console.info('[CalCheck] PHOTO_COMPRESSION_SUCCESS', {
+        source: sourceLabel,
+        diagnostics: preparedImage.diagnostics
+      })
+      console.info('[CalCheck] PHOTO_HANDOFF_TO_SCAN', {
+        source: sourceLabel,
+        upload_size_bytes: preparedImage.diagnostics?.upload_size_bytes
+      })
+      recordPerformanceMetric('PHOTO_COMPRESSION_SUCCESS', {
+        source: sourceLabel,
+        upload_size_bytes: preparedImage.diagnostics?.upload_size_bytes,
+        durationMs: preparedImage.diagnostics?.compression_duration_ms
+      })
+      recordPerformanceMetric('PHOTO_HANDOFF_TO_SCAN', {
+        source: sourceLabel,
+        upload_size_bytes: preparedImage.diagnostics?.upload_size_bytes
+      })
 
+      setFlowStatus('Analyzing meal...')
+      setStage('analysis')
+      console.info('[CalCheck] ANALYSIS_FLOW_STARTED', { source: sourceLabel })
+      console.info('[CalCheck] ANALYSIS_START', { source: sourceLabel })
+      recordPerformanceMetric('ANALYSIS_FLOW_STARTED', { source: sourceLabel })
+      recordPerformanceMetric('ANALYSIS_START', { source: sourceLabel })
+      currentPhase = 'analysis'
       const result = await withTimeout(
         trackApiRequest('analyze-food flow', () => analyzeFood(preparedImage.dataUrl), {
           onLongRequest: (message) => setRequestNotice(message)
         }),
-        45000,
+        ANALYSIS_TIMEOUT_MS,
         'Analysis is taking too long. Please try again.'
       )
 
       if (analysisRequestRef.current !== requestId) return
 
+      console.info('[CalCheck] ANALYSIS_SUCCESS', { source: sourceLabel })
+      recordPerformanceMetric('ANALYSIS_SUCCESS', { source: sourceLabel })
       setAnalysisResult(result)
       setRequestNotice(null)
+      setFlowStatus(null)
       onAnalysisComplete?.()
       setStage('results')
     } catch (err) {
       if (analysisRequestRef.current !== requestId) return
 
-      setError(err.message || 'Failed to analyze food image. Please try again.')
+      const message = err.message || 'Failed to analyze food image. Please try again.'
+      const failedDuringCompression = currentPhase === 'photo-compression'
+      const timeoutStage = message.includes('took too long') ? 'photo-compression' : 'analysis'
+      console.error(failedDuringCompression ? '[CalCheck] PHOTO_COMPRESSION_FAILED' : '[CalCheck] ANALYSIS_FAILED', {
+        source: sourceLabel,
+        error: err
+      })
+      console.error('[CalCheck] ANALYSIS_FLOW_ABORTED', {
+        source: sourceLabel,
+        stage: failedDuringCompression ? 'photo-compression' : 'analysis',
+        error: err
+      })
+      recordPerformanceMetric(failedDuringCompression ? 'PHOTO_COMPRESSION_FAILED' : 'ANALYSIS_FAILED', {
+        source: sourceLabel,
+        error: message
+      })
+      recordPerformanceMetric('ANALYSIS_FLOW_ABORTED', {
+        source: sourceLabel,
+        stage: failedDuringCompression ? 'photo-compression' : 'analysis',
+        error: message
+      })
+      if (message.includes('too long')) {
+        recordPerformanceMetric('ANALYSIS_FLOW_TIMEOUT', {
+          source: sourceLabel,
+          stage: timeoutStage,
+          timeoutMs: failedDuringCompression ? PHOTO_COMPRESSION_TIMEOUT_MS : ANALYSIS_TIMEOUT_MS
+        })
+      }
+      setError(message)
       setRequestNotice(null)
-      setStage('camera')
-      setCapturedImage(null)
+      setFlowStatus(null)
+      setStage('error')
       clearPreviewUrl()
       uploadImageRef.current = null
     }
@@ -200,7 +279,18 @@ export default function CameraModal({
   }
 
   const handleCapture = () => {
-    if (!videoRef.current || !canvasRef.current) return
+    if (!videoRef.current || !canvasRef.current) {
+      console.warn('[CalCheck] CAMERA_OK_NOOP_PREVENTED', {
+        source: 'camera-capture',
+        reason: 'missing-video-or-canvas'
+      })
+      recordPerformanceMetric('CAMERA_OK_NOOP_PREVENTED', {
+        source: 'camera-capture',
+        reason: 'missing-video-or-canvas'
+      })
+      setError('Camera is not ready yet. Please try again.')
+      return
+    }
 
     const video = videoRef.current
     const canvas = canvasRef.current
@@ -255,7 +345,10 @@ export default function CameraModal({
     setError(null)
     setRequestNotice(null)
     setCameraError(null)
+    setFlowStatus(null)
     uploadImageRef.current = null
+    retryImageSourceRef.current = null
+    retrySourceLabelRef.current = null
     clearPreviewUrl()
     stopDesktopCamera()
     onClose()
@@ -267,6 +360,7 @@ export default function CameraModal({
     setAnalysisResult(null)
     setError(null)
     setRequestNotice(null)
+    setFlowStatus(null)
     uploadImageRef.current = null
     clearPreviewUrl()
     setStage('camera')
@@ -276,6 +370,26 @@ export default function CameraModal({
     }
 
     startDesktopCamera()
+  }
+
+  const handleRetry = () => {
+    const source = retryImageSourceRef.current
+    const sourceLabel = retrySourceLabelRef.current || 'retry'
+
+    if (!source) {
+      console.warn('[CalCheck] CAMERA_OK_NOOP_PREVENTED', {
+        source: sourceLabel,
+        reason: 'missing-retry-image'
+      })
+      recordPerformanceMetric('CAMERA_OK_NOOP_PREVENTED', {
+        source: sourceLabel,
+        reason: 'missing-retry-image'
+      })
+      setError('Photo is no longer available. Please retake it.')
+      return
+    }
+
+    prepareAndAnalyzePhoto(source, sourceLabel)
   }
 
   if (!isOpen) return null
@@ -302,19 +416,16 @@ export default function CameraModal({
           )}
 
           {stage === 'camera' && pendingImage && error && (
-            <div className="flex-1 flex flex-col items-center justify-center p-6 text-center min-h-[40vh]">
-              <p className="text-gray-900 font-semibold mb-2">Analysis failed</p>
-              <p className="text-sm text-gray-600 mb-6">{error}</p>
-              <button
-                onClick={handleClose}
-                className="bg-gradient-to-r from-brand-400 to-brand-500 text-brand-900 px-6 py-3 rounded-xl font-semibold hover:from-brand-500 hover:to-brand-400"
-              >
-                Try another image
-              </button>
-            </div>
+            <FailureView error={error} onRetry={handleRetry} onRetake={handleRetake} />
           )}
 
+          {stage === 'preparing' && <PreparingView status={flowStatus || 'Preparing photo...'} />}
+
           {stage === 'analysis' && <AnalysisScreen />}
+
+          {stage === 'error' && (
+            <FailureView error={error} onRetry={handleRetry} onRetake={handleRetake} />
+          )}
 
           {stage === 'results' && (
             <ResultsScreen
@@ -354,6 +465,41 @@ const withTimeout = (promise, ms, message) => {
   return Promise.race([promise, timeout]).finally(() => {
     window.clearTimeout(timeoutId)
   })
+}
+
+function PreparingView({ status }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-brand-50 to-white min-h-[60vh] text-center">
+      <Loader2 size={34} className="animate-spin text-brand-700 mb-4" />
+      <h2 className="text-2xl font-bold text-ink mb-2">{status}</h2>
+      <p className="text-sm text-gray-500">Keep CalCheck open while the photo is prepared.</p>
+    </div>
+  )
+}
+
+function FailureView({ error, onRetry, onRetake }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center min-h-[60vh]">
+      <p className="text-gray-900 font-semibold mb-2">Analysis did not start</p>
+      <p className="text-sm text-gray-600 mb-6">{error || 'Please retry or retake the photo.'}</p>
+      <div className="w-full max-w-xs space-y-3">
+        <button
+          type="button"
+          onClick={onRetry}
+          className="w-full bg-gradient-to-r from-brand-400 to-brand-500 text-brand-900 px-6 py-3 rounded-xl font-semibold hover:from-brand-500 hover:to-brand-400"
+        >
+          Retry
+        </button>
+        <button
+          type="button"
+          onClick={onRetake}
+          className="w-full bg-gray-100 text-gray-900 px-6 py-3 rounded-xl font-semibold hover:bg-gray-200"
+        >
+          Retake
+        </button>
+      </div>
+    </div>
+  )
 }
 
 export async function restorePendingMeal(user, onMealSaved) {

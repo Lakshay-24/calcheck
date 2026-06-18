@@ -1,5 +1,5 @@
 // App shell - routes and main layout
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { supabase } from './services/supabase.js'
 import { getOrCreateUserProfile } from './services/database'
@@ -10,10 +10,11 @@ import './index.css'
 
 import ScanScreen from './screens/ScanScreen'
 import OnboardingScreen from './screens/OnboardingScreen'
-import ProgressScreen from './screens/ProgressScreen'
-import ProfileScreen from './screens/ProfileScreen'
-import InfoPage from './screens/InfoPage'
 import BottomNav from './components/BottomNav'
+
+const ProgressScreen = lazy(() => import('./screens/ProgressScreen'))
+const ProfileScreen = lazy(() => import('./screens/ProfileScreen'))
+const InfoPage = lazy(() => import('./screens/InfoPage'))
 
 const profileSetupInFlight = new Set()
 const timedOutSessionFallback = { data: { session: null }, error: null, __calcheckTimedOut: true }
@@ -506,7 +507,7 @@ function App() {
       <div className="h-screen w-screen flex flex-col bg-white overflow-hidden">
         <div className="flex-1 overflow-y-auto">
           <Routes>
-            <Route path="/info/:slug" element={<InfoPage />} />
+            <Route path="/info/:slug" element={<LazyRouteFallback><InfoPage /></LazyRouteFallback>} />
             <Route
               path="/"
               element={
@@ -519,7 +520,7 @@ function App() {
               path="/progress"
               element={
                 user
-                  ? <ProgressScreen key={`progress-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} />
+                  ? <LazyRouteFallback><ProgressScreen key={`progress-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} /></LazyRouteFallback>
                   : authRestorePending
                     ? <AuthRecoveryScreen />
                     : <Navigate to="/" />
@@ -529,7 +530,7 @@ function App() {
               path="/profile"
               element={
                 user
-                  ? <ProfileScreen user={user} />
+                  ? <LazyRouteFallback><ProfileScreen user={user} /></LazyRouteFallback>
                   : authRestorePending
                     ? <AuthRecoveryScreen />
                     : <Navigate to="/" />
@@ -550,6 +551,30 @@ function AuthRecoveryScreen() {
       <div className="text-center">
         <div className="w-10 h-10 border-3 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
         <p className="text-sm font-semibold text-gray-700">Restoring session...</p>
+      </div>
+    </div>
+  )
+}
+
+function LazyRouteFallback({ children }) {
+  return (
+    <Suspense fallback={<RouteSkeleton />}>
+      {children}
+    </Suspense>
+  )
+}
+
+function RouteSkeleton() {
+  return (
+    <div className="h-full w-full bg-white overflow-hidden">
+      <div className="border-b border-gray-100 px-6 py-4">
+        <div className="h-8 w-36 rounded-xl bg-gray-100 animate-pulse" />
+        <div className="mt-2 h-4 w-48 rounded-lg bg-gray-100 animate-pulse" />
+      </div>
+      <div className="px-6 py-6 space-y-4">
+        <div className="h-36 rounded-2xl bg-gray-100 animate-pulse" />
+        <div className="h-24 rounded-2xl bg-gray-100 animate-pulse" />
+        <div className="h-24 rounded-2xl bg-gray-100 animate-pulse" />
       </div>
     </div>
   )

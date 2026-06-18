@@ -22,12 +22,14 @@ import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
 
 const FREE_SCAN_LIMIT = 2
 const POST_LOGIN_SCAN_INTENT_KEY = 'calcheck-post-login-scan-intent'
+const ACCESS_CHECK_TIMEOUT_MS = 8000
 
 export default function ScanScreen({ user, resumeSignal = 0 }) {
   const cameraInputRef = useRef(null)
   const uploadInputRef = useRef(null)
   const loadRequestRef = useRef(0)
   const scanGateInFlightRef = useRef(false)
+  const mealsCountRef = useRef(0)
   const [meals, setMeals] = useState([])
   const [totals, setTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [goals, setGoals] = useState({ calories: 2500, protein: 150 })
@@ -51,6 +53,10 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const timezone = getUserTimezone()
   const pro = isUserPro(profile)
 
+  useEffect(() => {
+    mealsCountRef.current = meals.length
+  }, [meals.length])
+
   const loadTodaysMeals = useCallback(async (reason = 'screen-load') => {
     if (!user?.id) {
       setLoading(false)
@@ -64,6 +70,12 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
     try {
       console.info('[CalCheck] data refresh started', { screen: 'scan', reason })
+      if (mealsCountRef.current === 0) {
+        recordPerformanceMetric('SCREEN_SKELETON_SHOWN', {
+          screen: 'history',
+          reason
+        })
+      }
       setLoading(true)
       const [mealLogs, profileResult, scanCount] = await trackApiRequest(
         'history load',
@@ -196,7 +208,17 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   }
 
   const handleScanRequest = async (source = 'camera') => {
-    if (scanGateInFlightRef.current) return
+    if (scanGateInFlightRef.current) {
+      console.warn('[CalCheck] CAMERA_OK_NOOP_PREVENTED', {
+        source,
+        reason: 'access-check-already-running'
+      })
+      recordPerformanceMetric('CAMERA_OK_NOOP_PREVENTED', {
+        source,
+        reason: 'access-check-already-running'
+      })
+      return
+    }
 
     if (!user?.id) {
       sessionStorage.setItem(POST_LOGIN_SCAN_INTENT_KEY, source)
@@ -207,25 +229,31 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     try {
       scanGateInFlightRef.current = true
       setScanGateLoading(true)
-      let [latestProfile, latestScanCount] = await trackApiRequest(
-        'access check',
-        () => Promise.all([
-          trackStartupStep('access check profile fetch', () => getUserProfile(user.id), {
-            blocksRender: false,
-            timeoutMs: 5000,
-            fallbackValue: profile
-          }),
-          trackStartupStep('access check scan counter fetch', () => getLifetimeScanCount(user.id), {
-            blocksRender: false,
-            timeoutMs: 5000,
-            fallbackValue: lifetimeScans
-          })
-        ]),
-        {
-          dedupeKey: `access-check:${user.id}`,
-          profileFetchBlockedByDedupe: true,
-          onLongRequest: (message) => setSaveNotice(message)
-        }
+      console.info('[CalCheck] ACCESS_CHECK_START', { source, user_id: user.id })
+      recordPerformanceMetric('ACCESS_CHECK_START', { source })
+      let [latestProfile, latestScanCount] = await withTimeout(
+        trackApiRequest(
+          'access check',
+          () => Promise.all([
+            trackStartupStep('access check profile fetch', () => getUserProfile(user.id), {
+              blocksRender: false,
+              timeoutMs: ACCESS_CHECK_TIMEOUT_MS,
+              fallbackValue: profile
+            }),
+            trackStartupStep('access check scan counter fetch', () => getLifetimeScanCount(user.id), {
+              blocksRender: false,
+              timeoutMs: ACCESS_CHECK_TIMEOUT_MS,
+              fallbackValue: lifetimeScans
+            })
+          ]),
+          {
+            dedupeKey: `access-check:${user.id}`,
+            profileFetchBlockedByDedupe: true,
+            onLongRequest: (message) => setSaveNotice(message)
+          }
+        ),
+        ACCESS_CHECK_TIMEOUT_MS,
+        'Access check timed out. Please try again.'
       )
 
       if (shouldRepairSubscriptionBeforeScan(latestProfile)) {
@@ -241,14 +269,49 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       setLifetimeScans(latestScanCount)
 
       if (!isUserPro(latestProfile) && latestScanCount >= FREE_SCAN_LIMIT) {
+        console.info('[CalCheck] ACCESS_CHECK_SUCCESS', {
+          source,
+          allowed: false,
+          reason: 'free-limit-reached',
+          scan_count: latestScanCount
+        })
         setPendingPaywallScanSource(source)
         setUpgradeError(null)
         setPaywallOpen(true)
         return
       }
 
+      console.info('[CalCheck] ACCESS_CHECK_SUCCESS', {
+        source,
+        allowed: true,
+        scan_count: latestScanCount,
+        is_pro: Boolean(latestProfile?.is_pro)
+      })
+      recordPerformanceMetric('ACCESS_CHECK_SUCCESS', {
+        source,
+        allowed: true,
+        scan_count: latestScanCount,
+        is_pro: Boolean(latestProfile?.is_pro)
+      })
       startScanFlow(source)
     } catch (error) {
+      console.error('[CalCheck] ANALYSIS_FLOW_ABORTED', {
+        source,
+        stage: 'access-check',
+        error
+      })
+      recordPerformanceMetric('ANALYSIS_FLOW_ABORTED', {
+        source,
+        stage: 'access-check',
+        error: error?.message || String(error)
+      })
+      if (error?.message?.includes('timed out')) {
+        recordPerformanceMetric('ANALYSIS_FLOW_TIMEOUT', {
+          source,
+          stage: 'access-check',
+          timeoutMs: ACCESS_CHECK_TIMEOUT_MS
+        })
+      }
       console.error('Failed to check scan access:', error)
       setSaveNotice('Could not check scan access. Please try again.')
       setTimeout(() => setSaveNotice(null), 4000)
@@ -260,8 +323,27 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
   const handleImageSelected = (e) => {
     const file = e.target.files?.[0]
-    if (!file) return
+    if (!file) {
+      console.warn('[CalCheck] CAMERA_OK_NOOP_PREVENTED', {
+        reason: 'file-input-empty'
+      })
+      recordPerformanceMetric('CAMERA_OK_NOOP_PREVENTED', {
+        reason: 'file-input-empty'
+      })
+      return
+    }
 
+    console.info('[CalCheck] PHOTO_HANDOFF_TO_SCAN', {
+      source: 'native-file-input',
+      file_name: file.name,
+      file_size: file.size,
+      file_type: file.type
+    })
+    recordPerformanceMetric('PHOTO_HANDOFF_TO_SCAN', {
+      source: 'native-file-input',
+      file_size: file.size,
+      file_type: file.type
+    })
     setPendingImage(file)
     setCameraOpen(true)
     e.target.value = ''
@@ -593,8 +675,8 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           </div>
         </div>
 
-        {loading ? (
-          <div className="text-center py-8 text-gray-500 text-sm">Loading meals...</div>
+        {loading && meals.length === 0 ? (
+          <MealHistorySkeleton />
         ) : meals.length === 0 ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
@@ -629,6 +711,33 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+const withTimeout = (promise, ms, message) => {
+  let timeoutId
+
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), ms)
+  })
+
+  return Promise.race([promise, timeout]).finally(() => {
+    window.clearTimeout(timeoutId)
+  })
+}
+
+function MealHistorySkeleton() {
+  return (
+    <div className="space-y-3 animate-pulse">
+      <div className="h-5 w-28 rounded bg-gray-100" />
+      {[0, 1, 2].map((item) => (
+        <div key={item} className="bg-white border border-gray-100 rounded-xl p-4">
+          <div className="h-4 w-40 rounded bg-gray-100" />
+          <div className="mt-3 h-3 w-56 rounded bg-gray-100" />
+          <div className="mt-2 h-3 w-24 rounded bg-gray-100" />
+        </div>
+      ))}
     </div>
   )
 }

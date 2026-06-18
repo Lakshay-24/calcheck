@@ -15,6 +15,7 @@ import { signOut } from '../services/supabase'
 export default function ProfileScreen({ user }) {
   const [signingOut, setSigningOut] = useState(false)
   const [profile, setProfile] = useState(null)
+  const [profileLoading, setProfileLoading] = useState(false)
   const [subscriptionLoading, setSubscriptionLoading] = useState(false)
   const [subscriptionError, setSubscriptionError] = useState(null)
   const [subscriptionNotice, setSubscriptionNotice] = useState(null)
@@ -27,11 +28,17 @@ export default function ProfileScreen({ user }) {
   useEffect(() => {
     if (!user?.id) return
 
+    setProfileLoading(true)
+    recordPerformanceMetric('SCREEN_SKELETON_SHOWN', {
+      screen: 'profile-subscription',
+      reason: 'profile-load'
+    })
     getUserProfile(user.id)
       .then(setProfile)
       .catch((error) => {
         console.error('Profile subscription load error:', error)
       })
+      .finally(() => setProfileLoading(false))
   }, [user?.id])
 
   useEffect(() => {
@@ -202,6 +209,7 @@ export default function ProfileScreen({ user }) {
 
         <SubscriptionCard
           profile={profile}
+          profileLoading={profileLoading}
           loading={subscriptionLoading}
           error={subscriptionError}
           notice={subscriptionNotice}
@@ -526,7 +534,11 @@ async function waitForProConfirmation(userId) {
   throw new Error('Payment authorized. Pro access will unlock after Razorpay confirms the subscription.')
 }
 
-function SubscriptionCard({ profile, loading, error, notice, onSubscribe, onManage, onCancel }) {
+function SubscriptionCard({ profile, profileLoading, loading, error, notice, onSubscribe, onManage, onCancel }) {
+  if (profileLoading && !profile) {
+    return <SubscriptionCardSkeleton />
+  }
+
   const pro = isUserPro(profile)
   const status = profile?.subscription_status || 'free'
   const renewalDate = formatDate(profile?.current_period_end)
@@ -619,6 +631,26 @@ function SubscriptionCard({ profile, loading, error, notice, onSubscribe, onMana
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+function SubscriptionCardSkeleton() {
+  return (
+    <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-[0_14px_34px_rgba(16,42,42,0.05)] animate-pulse">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-3">
+          <div className="h-4 w-24 rounded bg-gray-100" />
+          <div className="h-8 w-36 rounded bg-gray-100" />
+          <div className="h-4 w-44 rounded bg-gray-100" />
+        </div>
+        <div className="h-10 w-10 rounded-full bg-gray-100" />
+      </div>
+      <div className="mt-5 space-y-3">
+        <div className="h-4 rounded bg-gray-100" />
+        <div className="h-4 rounded bg-gray-100" />
+      </div>
+      <div className="mt-5 h-12 rounded-2xl bg-gray-100" />
     </div>
   )
 }
