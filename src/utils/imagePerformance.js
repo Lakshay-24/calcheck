@@ -73,6 +73,7 @@ export const prepareImageForAnalysis = async (source, sourceLabel = 'image') => 
   return {
     dataUrl,
     previewUrl,
+    blob,
     diagnostics
   }
 }

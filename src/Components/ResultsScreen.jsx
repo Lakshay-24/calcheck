@@ -260,7 +260,7 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
               <span className="text-2xl">F</span>
               <div>
                 <p className="text-sm font-semibold text-gray-900">Fat</p>
-                <p className="text-xs text-gray-500">Essential nutrients</p>
+                <p className="text-xs text-gray-500">Supports satiety</p>
               </div>
             </div>
             <p className="text-lg font-bold text-gray-900">{adjustedResult?.fat || 0}g</p>
@@ -412,6 +412,23 @@ const scaleNutritionValue = (value, multiplier) => {
   return Math.round(numberValue * multiplier)
 }
 
+const scaleNutrientsJson = (nutrientsJson, multiplier) => {
+  if (!nutrientsJson || typeof nutrientsJson !== 'object') return nutrientsJson || null
+
+  return Object.entries(nutrientsJson).reduce((values, [key, value]) => {
+    values[key] = value == null ? null : scaleNutrientValue(value, multiplier)
+    return values
+  }, {})
+}
+
+const scaleNutrientValue = (value, multiplier) => {
+  const numberValue = Number(value)
+  if (!Number.isFinite(numberValue)) return null
+
+  const scaled = numberValue * multiplier
+  return scaled < 10 ? Number(scaled.toFixed(1)) : Math.round(scaled)
+}
+
 const applyPortionAdjustment = (result, portionSize) => {
   if (!result) return result
 
@@ -424,6 +441,7 @@ const applyPortionAdjustment = (result, portionSize) => {
     protein: scaleNutritionValue(result.protein, portionMultiplier),
     carbs: scaleNutritionValue(result.carbs, portionMultiplier),
     fat: scaleNutritionValue(result.fat, portionMultiplier),
+    nutrients_json: scaleNutrientsJson(result.nutrients_json, portionMultiplier),
     estimated_grams: scaleNutritionValue(result.estimated_grams, portionMultiplier),
     portion_size: normalizedPortionSize,
     portion_multiplier: portionMultiplier

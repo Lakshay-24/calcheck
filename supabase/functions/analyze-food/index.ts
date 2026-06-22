@@ -22,7 +22,34 @@ Rules:
 - If uncertain, lower portion_confidence
 - List 2-3 candidates ranked by confidence; food_name must match the top candidate
 - If the image is unclear or not food, set confidence below 0.4 and use food_name "Unidentified food"
-- Never invent foods not supported by visual evidence`
+- Never invent foods not supported by visual evidence
+- Optionally estimate essential nutrient values in nutrients_json when there is enough visual evidence
+- Nutrient values are rough AI estimates, not medical values
+- Return null for any nutrient that cannot be estimated
+- Do not hallucinate precision for micronutrients
+- If returning nutrients_json, set nutrient_confidence to low, medium, or high and nutrient_source to "ai_estimate"`
+
+const nutrientProperties = {
+  fiber_g: { type: ['number', 'null'] },
+  calcium_mg: { type: ['number', 'null'] },
+  iron_mg: { type: ['number', 'null'] },
+  vitamin_d_ug: { type: ['number', 'null'] },
+  vitamin_b12_ug: { type: ['number', 'null'] },
+  potassium_mg: { type: ['number', 'null'] },
+  magnesium_mg: { type: ['number', 'null'] },
+  omega3_mg: { type: ['number', 'null'] },
+  vitamin_c_mg: { type: ['number', 'null'] },
+  sodium_mg: { type: ['number', 'null'] },
+  folate_ug: { type: ['number', 'null'] },
+  zinc_mg: { type: ['number', 'null'] },
+  iodine_ug: { type: ['number', 'null'] },
+  selenium_ug: { type: ['number', 'null'] },
+  vitamin_a_ug: { type: ['number', 'null'] },
+  vitamin_e_mg: { type: ['number', 'null'] },
+  vitamin_k_ug: { type: ['number', 'null'] }
+}
+
+const nutrientKeys = Object.keys(nutrientProperties)
 
 const foodAnalysisSchema = {
   type: 'object',
@@ -40,7 +67,10 @@ const foodAnalysisSchema = {
     'estimated_grams',
     'portion_confidence',
     'confidence',
-    'candidates'
+    'candidates',
+    'nutrients_json',
+    'nutrient_confidence',
+    'nutrient_source'
   ],
   properties: {
     food_name: { type: 'string' },
@@ -68,7 +98,15 @@ const foodAnalysisSchema = {
           confidence: { type: 'number', minimum: 0, maximum: 1 }
         }
       }
-    }
+    },
+    nutrients_json: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: nutrientKeys,
+      properties: nutrientProperties
+    },
+    nutrient_confidence: { type: ['string', 'null'], enum: ['low', 'medium', 'high', null] },
+    nutrient_source: { type: ['string', 'null'], enum: ['ai_estimate', null] }
   }
 }
 
@@ -90,6 +128,47 @@ const toFiniteNumber = (value: unknown, fallback = 0) => {
   return Number.isFinite(numberValue) ? numberValue : fallback
 }
 
+const toNullableNumber = (value: unknown) => {
+  if (value == null) return null
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : null
+}
+
+const normalizeNutrients = (analysis: Record<string, unknown>) => {
+  const rawNutrients = analysis.nutrients_json
+
+  if (!rawNutrients || typeof rawNutrients !== 'object') {
+    console.info('[CalCheck] NUTRIENT_JSON_MISSING', {
+      food_name: analysis.food_name || null
+    })
+    return {
+      nutrients_json: null,
+      nutrient_confidence: null,
+      nutrient_source: null
+    }
+  }
+
+  const nutrients = nutrientKeys.reduce<Record<string, number | null>>((values, key) => {
+    values[key] = toNullableNumber((rawNutrients as Record<string, unknown>)[key])
+    return values
+  }, {})
+  const confidence = ['low', 'medium', 'high'].includes(String(analysis.nutrient_confidence))
+    ? String(analysis.nutrient_confidence)
+    : 'low'
+
+  console.info('[CalCheck] NUTRIENT_JSON_RECEIVED', {
+    food_name: analysis.food_name || null,
+    nutrient_confidence: confidence,
+    populated_count: Object.values(nutrients).filter((value) => value != null).length
+  })
+
+  return {
+    nutrients_json: nutrients,
+    nutrient_confidence: confidence,
+    nutrient_source: 'ai_estimate'
+  }
+}
+
 const normalizeAnalysis = (analysis: Record<string, unknown>) => {
   const confidence = clamp(toFiniteNumber(analysis.confidence, 0.5), 0, 1)
   const foodName = String(analysis.food_name || 'Unidentified food')
@@ -105,6 +184,8 @@ const normalizeAnalysis = (analysis: Record<string, unknown>) => {
           confidence: clamp(toFiniteNumber(candidate.confidence, 0), 0, 1)
         }))
     : []
+
+  const nutrientFields = normalizeNutrients(analysis)
 
   return {
     food_name: foodName,
@@ -127,6 +208,7 @@ const normalizeAnalysis = (analysis: Record<string, unknown>) => {
     estimated_grams: Math.max(0, toFiniteNumber(analysis.estimated_grams)),
     portion_confidence: clamp(toFiniteNumber(analysis.portion_confidence, 0.5), 0, 1),
     confidence,
+    ...nutrientFields,
     candidates: candidates.length > 0 ? candidates : [{ name: foodName, confidence }]
   }
 }

@@ -2,8 +2,10 @@ import { supabase } from './supabase'
 import { trackApiRequest } from './diagnostics'
 import {
   getEndOfLocalDay,
+  getEndOfLocalDate,
   getLocalDate,
   getMealTypeForLocalTime,
+  getStartOfLocalDate,
   getStartOfLocalDay,
   getUserTimezone,
   parseDatabaseTimestamp
@@ -11,6 +13,7 @@ import {
 
 const MEAL_LOG_COLUMNS = [
   'id',
+  'user_id',
   'food_name',
   'calories',
   'protein',
@@ -27,11 +30,26 @@ const MEAL_LOG_COLUMNS = [
   'timestamp',
   'timezone',
   'local_date',
-  'meal_type'
+  'meal_type',
+  'image_path',
+  'image_url',
+  'thumbnail_path',
+  'thumbnail_url',
+  'image_width',
+  'image_height',
+  'image_size_bytes',
+  'image_content_type',
+  'image_uploaded_at',
+  'source',
+  'nutrients_json',
+  'nutrient_confidence',
+  'nutrient_source',
+  'nutrients_estimated_at'
 ].join(',')
 
 const USER_PROFILE_COLUMNS = [
   'id',
+  'created_at',
   'email',
   'goal',
   'calorie_target',
@@ -50,19 +68,97 @@ const USER_PROFILE_COLUMNS = [
 const withAbortSignal = (query, signal) =>
   signal ? query.abortSignal(signal) : query
 
+export const uploadMealImage = async (userId, mealId, imagePayload) => {
+  if (!imagePayload?.blob) return null
+
+  const imagePath = `${userId}/${mealId}/original.jpg`
+  const uploadStartedAt = new Date().toISOString()
+
+  console.info('[CalCheck] MEAL_IMAGE_UPLOAD_START', {
+    user_id: userId,
+    meal_id: mealId,
+    image_path: imagePath,
+    image_size_bytes: imagePayload.blob.size || null
+  })
+
+  const { error } = await trackApiRequest('meal image upload', () => supabase
+    .storage
+    .from('meal-images')
+    .upload(imagePath, imagePayload.blob, {
+      cacheControl: '31536000',
+      contentType: 'image/jpeg',
+      upsert: true
+    }))
+
+  if (error) throw error
+
+  const { data: publicUrlData } = supabase
+    .storage
+    .from('meal-images')
+    .getPublicUrl(imagePath)
+
+  const imageUrl = publicUrlData?.publicUrl || null
+  const diagnostics = imagePayload.diagnostics || {}
+  const imageFields = {
+    image_path: imagePath,
+    image_url: imageUrl,
+    thumbnail_path: imagePath,
+    thumbnail_url: imageUrl,
+    image_width: diagnostics.upload_width || null,
+    image_height: diagnostics.upload_height || null,
+    image_size_bytes: imagePayload.blob.size || diagnostics.upload_size_bytes || null,
+    image_content_type: 'image/jpeg',
+    image_uploaded_at: uploadStartedAt
+  }
+
+  console.info('[CalCheck] MEAL_IMAGE_UPLOAD_SUCCESS', {
+    user_id: userId,
+    meal_id: mealId,
+    image_path: imagePath,
+    image_width: imageFields.image_width,
+    image_height: imageFields.image_height,
+    image_size_bytes: imageFields.image_size_bytes,
+    has_public_url: Boolean(imageUrl)
+  })
+
+  return imageFields
+}
+
 // Meal CRUD operations
-export const saveMealLog = async (userId, mealData) => {
+export const saveMealLog = async (userId, mealData, options = {}) => {
   const now = new Date()
   const timezone = getUserTimezone()
   const localDate = getLocalDate(now, timezone)
   const mealType = getMealTypeForLocalTime(now, timezone)
+  const mealFields = { ...(mealData || {}) }
+  delete mealFields.image
+  delete mealFields.imageData
+  delete mealFields.image_path
+  delete mealFields.image_url
+  delete mealFields.thumbnail_path
+  delete mealFields.thumbnail_url
+  delete mealFields.photo_url
+  delete mealFields.image_width
+  delete mealFields.image_height
+  delete mealFields.image_size_bytes
+  delete mealFields.image_content_type
+  delete mealFields.image_uploaded_at
+  const hasNutrients = mealFields.nutrients_json && typeof mealFields.nutrients_json === 'object'
+  const nutrientConfidence = ['low', 'medium', 'high'].includes(mealFields.nutrient_confidence)
+    ? mealFields.nutrient_confidence
+    : null
   const insertPayload = {
-    ...mealData,
+    ...mealFields,
     user_id: userId,
     timestamp: now.toISOString(),
     timezone,
     local_date: localDate,
-    meal_type: mealType
+    meal_type: mealType,
+    source: options.source || mealFields.source || null,
+    nutrients_json: hasNutrients ? mealFields.nutrients_json : null,
+    nutrient_confidence: hasNutrients ? nutrientConfidence : null,
+    nutrient_source: hasNutrients ? 'ai_estimate' : null,
+    nutrients_estimated_at: hasNutrients ? now.toISOString() : null
   }
 
   console.info('[CalCheck] saveMealLog timezone detection', {
@@ -95,6 +191,13 @@ export const saveMealLog = async (userId, mealData) => {
     meal_type: insertedMeal?.meal_type,
     full_row: insertedMeal
   })
+  console.info('[CalCheck] NUTRIENT_FIELDS_SAVED', {
+    id: insertedMeal?.id || null,
+    has_nutrients_json: Boolean(insertedMeal?.nutrients_json),
+    nutrient_confidence: insertedMeal?.nutrient_confidence || null
+  })
+
+  let savedMeal = insertedMeal
 
   if (
     insertedMeal?.id &&
@@ -128,10 +231,42 @@ export const saveMealLog = async (userId, mealData) => {
       full_row: repairedMeal
     })
 
-    return repairedMeal
+    savedMeal = repairedMeal
   }
 
-  return insertedMeal
+  if (savedMeal?.id && options.image?.blob) {
+    try {
+      const imageFields = await uploadMealImage(userId, savedMeal.id, options.image)
+
+      if (imageFields) {
+        const { data: mealWithImage, error: imageUpdateError } = await trackApiRequest('meal image fields save', () => supabase
+          .from('meal_logs')
+          .update(imageFields)
+          .eq('id', savedMeal.id)
+          .select(MEAL_LOG_COLUMNS)
+          .single())
+
+        if (imageUpdateError) throw imageUpdateError
+
+        console.info('[CalCheck] MEAL_IMAGE_FIELDS_SAVED', {
+          id: mealWithImage?.id,
+          image_path: mealWithImage?.image_path,
+          has_image_url: Boolean(mealWithImage?.image_url),
+          has_thumbnail_url: Boolean(mealWithImage?.thumbnail_url)
+        })
+
+        return mealWithImage
+      }
+    } catch (imageError) {
+      console.warn('[CalCheck] MEAL_IMAGE_UPLOAD_FAILED', {
+        user_id: userId,
+        meal_id: savedMeal.id,
+        error: imageError?.message || String(imageError)
+      })
+    }
+  }
+
+  return savedMeal
 }
 
 export const getMealLogsToday = async (userId, timezone = getUserTimezone(), options = {}) => {
@@ -287,6 +422,59 @@ export const getOrCreateUserProfile = async (userId, email) => {
       error
     })
     throw error
+  }
+}
+
+export const getMealLogsForLocalDateRange = async (
+  userId,
+  startLocalDate,
+  endLocalDate,
+  timezone = getUserTimezone(),
+  options = {}
+) => {
+  const rangeStart = getStartOfLocalDate(startLocalDate, timezone)
+  const rangeEnd = getEndOfLocalDate(endLocalDate, timezone)
+
+  const { data, error } = await trackApiRequest('history load local date range', () => withAbortSignal(
+    supabase
+      .from('meal_logs')
+      .select(MEAL_LOG_COLUMNS)
+      .eq('user_id', userId)
+      .gte('timestamp', rangeStart.toISOString())
+      .lte('timestamp', rangeEnd.toISOString())
+      .order('timestamp', { ascending: false }),
+    options.signal
+  ))
+
+  if (error) throw error
+
+  return (data || []).filter((meal) => {
+    const mealLocalDate = meal.local_date || getLocalDate(parseDatabaseTimestamp(meal.timestamp), meal.timezone || timezone)
+    return mealLocalDate >= startLocalDate && mealLocalDate <= endLocalDate
+  })
+}
+
+export const getFirstMealLog = async (userId, timezone = getUserTimezone(), options = {}) => {
+  const { data, error } = await trackApiRequest('first meal load', () => withAbortSignal(
+    supabase
+      .from('meal_logs')
+      .select(MEAL_LOG_COLUMNS)
+      .eq('user_id', userId)
+      .order('timestamp', { ascending: true })
+      .limit(1),
+    options.signal
+  ))
+
+  if (error) throw error
+
+  const meal = data?.[0] || null
+  if (!meal) return null
+
+  return {
+    ...meal,
+    fallback_anchor_date: meal.local_date
+      ? getStartOfLocalDate(meal.local_date, meal.timezone || timezone).toISOString()
+      : meal.timestamp
   }
 }
 

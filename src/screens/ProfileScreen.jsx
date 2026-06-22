@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Check, Loader2, LogOut } from 'lucide-react'
-import { InstallProfileCard } from '../components/InstallApp'
+import { InstallProfileCard } from '../Components/InstallApp'
 import { getUserProfile, isUserPro } from '../services/database'
 import {
   cancelSubscription,

@@ -79,7 +79,7 @@ const zonedTimeToUtc = ({ year, month, day, hour = 0, minute = 0, second = 0 }, 
   return utcDate
 }
 
-const addDaysToLocalDate = (localDate, days) => {
+export const addDaysToLocalDate = (localDate, days) => {
   const [year, month, day] = localDate.split('-').map(Number)
   const utcDate = new Date(Date.UTC(year, month - 1, day + days))
 
@@ -90,16 +90,22 @@ const addDaysToLocalDate = (localDate, days) => {
   ].join('-')
 }
 
-export const getStartOfLocalDay = (date = new Date(), timeZone = getUserTimezone()) => {
-  const [year, month, day] = getLocalDate(date, timeZone).split('-').map(Number)
+export const getStartOfLocalDate = (localDate, timeZone = getUserTimezone()) => {
+  const [year, month, day] = localDate.split('-').map(Number)
   return zonedTimeToUtc({ year, month, day }, timeZone)
 }
 
-export const getEndOfLocalDay = (date = new Date(), timeZone = getUserTimezone()) => {
-  const nextLocalDate = addDaysToLocalDate(getLocalDate(date, timeZone), 1)
-  const [year, month, day] = nextLocalDate.split('-').map(Number)
+export const getEndOfLocalDate = (localDate, timeZone = getUserTimezone()) => {
+  const nextLocalDate = addDaysToLocalDate(localDate, 1)
+  return new Date(getStartOfLocalDate(nextLocalDate, timeZone).getTime() - 1)
+}
 
-  return new Date(zonedTimeToUtc({ year, month, day }, timeZone).getTime() - 1)
+export const getStartOfLocalDay = (date = new Date(), timeZone = getUserTimezone()) => {
+  return getStartOfLocalDate(getLocalDate(date, timeZone), timeZone)
+}
+
+export const getEndOfLocalDay = (date = new Date(), timeZone = getUserTimezone()) => {
+  return getEndOfLocalDate(getLocalDate(date, timeZone), timeZone)
 }
 
 export const isSameLocalDay = (a, b = new Date(), timeZone = getUserTimezone()) => {
@@ -128,4 +134,36 @@ export const formatLocalWeekday = (date = new Date(), timeZone = getUserTimezone
     timeZone,
     weekday: 'short'
   }).format(date)
+}
+
+export const formatLocalDateShort = (localDate) => {
+  const [year, month, day] = localDate.split('-').map(Number)
+  return new Intl.DateTimeFormat('en-IN', {
+    month: 'short',
+    day: 'numeric'
+  }).format(new Date(Date.UTC(year, month - 1, day)))
+}
+
+export const getLocalDateDiffDays = (startLocalDate, endLocalDate) => {
+  const [startYear, startMonth, startDay] = startLocalDate.split('-').map(Number)
+  const [endYear, endMonth, endDay] = endLocalDate.split('-').map(Number)
+  const startUtc = Date.UTC(startYear, startMonth - 1, startDay)
+  const endUtc = Date.UTC(endYear, endMonth - 1, endDay)
+
+  return Math.floor((endUtc - startUtc) / 86400000)
+}
+
+export const getUserWeekRange = (anchorDate, now = new Date(), timeZone = getUserTimezone()) => {
+  const anchorLocalDate = getLocalDate(parseDatabaseTimestamp(anchorDate), timeZone)
+  const todayLocalDate = getLocalDate(now, timeZone)
+  const elapsedDays = Math.max(0, getLocalDateDiffDays(anchorLocalDate, todayLocalDate))
+  const completedCycles = Math.floor(elapsedDays / 7)
+  const startLocalDate = addDaysToLocalDate(anchorLocalDate, completedCycles * 7)
+  const endLocalDate = addDaysToLocalDate(startLocalDate, 6)
+
+  return {
+    startLocalDate,
+    endLocalDate,
+    label: `${formatLocalDateShort(startLocalDate)} - ${formatLocalDateShort(endLocalDate)}`
+  }
 }

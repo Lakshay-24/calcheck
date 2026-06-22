@@ -10,7 +10,7 @@ import './index.css'
 
 import ScanScreen from './screens/ScanScreen'
 import OnboardingScreen from './screens/OnboardingScreen'
-import BottomNav from './components/BottomNav'
+import BottomNav from './Components/BottomNav'
 
 const ProgressScreen = lazy(() => import('./screens/ProgressScreen'))
 const ProfileScreen = lazy(() => import('./screens/ProfileScreen'))

@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Camera, Check, Loader2, Upload, X } from 'lucide-react'
-import CameraModal, { restorePendingMeal } from '../components/CameraModal'
-import { InstallButton, SmartInstallPrompt } from '../components/InstallApp'
+import CameraModal, { restorePendingMeal } from '../Components/CameraModal'
+import { InstallButton, SmartInstallPrompt } from '../Components/InstallApp'
+import { MealCard, MealDetailSheet } from '../Components/MealCard'
 import {
   calculateDailyTotals,
   getLifetimeScanCount,
@@ -17,7 +18,8 @@ import {
 } from '../services/subscriptions'
 import { signInWithGoogle } from '../services/supabase'
 import { recordPerformanceMetric, trackApiRequest, trackStartupStep } from '../services/diagnostics'
-import { formatLocalTime, formatLocalWeekday, getUserTimezone } from '../utils/timezone'
+import { formatLocalWeekday, getLocalDate, getUserTimezone, parseDatabaseTimestamp } from '../utils/timezone'
+import { onMealSaved } from '../utils/mealEvents'
 import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
 
 const FREE_SCAN_LIMIT = 2
@@ -45,6 +47,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const [authLoading, setAuthLoading] = useState(false)
   const [upgradeLoading, setUpgradeLoading] = useState(false)
   const [scanGateLoading, setScanGateLoading] = useState(false)
+  const [selectedMeal, setSelectedMeal] = useState(null)
   const [showSmartInstallPrompt, setShowSmartInstallPrompt] = useState(false)
   const [pendingPaywallScanSource, setPendingPaywallScanSource] = useState(null)
   const [proSuccessVisible, setProSuccessVisible] = useState(false)
@@ -57,7 +60,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     mealsCountRef.current = meals.length
   }, [meals.length])
 
-  const loadTodaysMeals = useCallback(async (reason = 'screen-load') => {
+  const loadTodaysMeals = useCallback(async (reason = 'screen-load', options = {}) => {
     if (!user?.id) {
       setLoading(false)
       setProfile(null)
@@ -97,7 +100,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           })
         ]),
         {
-          dedupeKey: `scan-history:${user.id}:${timezone}`,
+          dedupeKey: options.force ? null : `scan-history:${user.id}:${timezone}`,
           profileFetchBlockedByDedupe: true,
           onLongRequest: (message) => setSaveNotice(message)
         }
@@ -105,8 +108,16 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
       if (loadRequestRef.current !== requestId) return
 
+      const nextTotals = calculateDailyTotals(mealLogs)
+      console.info('[CalCheck] SCAN_TODAY_LOGS_COUNT', {
+        count: Array.isArray(mealLogs) ? mealLogs.length : 0,
+        timezone
+      })
+      console.info('[CalCheck] SCAN_TODAY_TOTALS', nextTotals)
+      storeScanTodayTotals(nextTotals, getLocalDate(new Date(), timezone))
+
       setMeals(mealLogs)
-      setTotals(calculateDailyTotals(mealLogs))
+      setTotals(nextTotals)
       setProfile(profileResult)
       setLifetimeScans(scanCount)
       if (profileResult) {
@@ -123,6 +134,22 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         setLoading(false)
       }
     }
+  }, [timezone, user?.id])
+
+  const mergeSavedMealIntoToday = useCallback((savedMeal) => {
+    if (!savedMeal || savedMeal.user_id !== user?.id) return
+
+    const mealLocalDate = savedMeal.local_date || getLocalDate(parseDatabaseTimestamp(savedMeal.timestamp), savedMeal.timezone || timezone)
+    const todayLocalDate = getLocalDate(new Date(), timezone)
+    if (mealLocalDate !== todayLocalDate) return
+
+    setMeals((currentMeals) => {
+      const nextMeals = mergeMeal(currentMeals, savedMeal)
+      const nextTotals = calculateDailyTotals(nextMeals)
+      setTotals(nextTotals)
+      storeScanTodayTotals(nextTotals, todayLocalDate)
+      return nextMeals
+    })
   }, [timezone, user?.id])
 
   const restorePendingMealAfterLogin = useCallback(async () => {
@@ -164,6 +191,15 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   }, [loadTodaysMeals, resumeSignal, user?.id])
 
   useEffect(() => {
+    if (!user?.id) return undefined
+
+    return onMealSaved((savedMeal) => {
+      mergeSavedMealIntoToday(savedMeal)
+      loadTodaysMeals('meal-saved', { force: true })
+    })
+  }, [loadTodaysMeals, mergeSavedMealIntoToday, user?.id])
+
+  useEffect(() => {
     if (!loading) return undefined
 
     const retryTimer = window.setTimeout(() => {
@@ -186,9 +222,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       meal_type: savedMeal?.meal_type
     })
 
-    if (user?.id) {
-      loadTodaysMeals()
-    }
+    mergeSavedMealIntoToday(savedMeal)
   }
 
   const startScanFlow = (source = 'camera') => {
@@ -689,28 +723,22 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           <div className="space-y-3">
             <h3 className="text-sm font-semibold text-gray-700">Today's Meals</h3>
             {meals.map((meal) => (
-              <div
+              <MealCard
                 key={meal.id}
-                className="bg-white border border-gray-200 rounded-xl p-4 flex items-start justify-between hover:border-brand-300 transition-colors"
-              >
-                <div className="flex-1">
-                  <p className="font-semibold text-gray-900">{meal.food_name}</p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {meal.calories} kcal • {meal.protein}g protein • {meal.carbs}g carbs • {meal.fat}g fat
-                  </p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    {formatLocalTime(meal.timestamp, meal.timezone || timezone)}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <div className="text-lg font-bold text-gray-900">{meal.meal_score}</div>
-                  <div className="text-xs text-gray-500">score</div>
-                </div>
-              </div>
+                meal={meal}
+                timezone={timezone}
+                onClick={setSelectedMeal}
+              />
             ))}
           </div>
         )}
       </div>
+      <MealDetailSheet
+        meal={selectedMeal}
+        user={user}
+        timezone={timezone}
+        onClose={() => setSelectedMeal(null)}
+      />
     </div>
   )
 }
@@ -725,6 +753,27 @@ const withTimeout = (promise, ms, message) => {
   return Promise.race([promise, timeout]).finally(() => {
     window.clearTimeout(timeoutId)
   })
+}
+
+function mergeMeal(mealLogs, savedMeal) {
+  const existing = Array.isArray(mealLogs) ? mealLogs : []
+  const withoutSavedMeal = existing.filter((meal) => meal.id !== savedMeal.id)
+  return [savedMeal, ...withoutSavedMeal].sort((a, b) =>
+    parseDatabaseTimestamp(b.timestamp).getTime() - parseDatabaseTimestamp(a.timestamp).getTime()
+  )
+}
+
+function storeScanTodayTotals(totals, localDate) {
+  if (typeof localStorage === 'undefined') return
+
+  try {
+    localStorage.setItem('calcheck-scan-today-totals', JSON.stringify({
+      localDate,
+      totals
+    }))
+  } catch {
+    // Diagnostics-only snapshot.
+  }
 }
 
 function MealHistorySkeleton() {

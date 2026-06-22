@@ -5,6 +5,7 @@ import { saveMealLog, getOrCreateUserProfile } from '../services/database'
 import { recordPerformanceMetric, trackApiRequest } from '../services/diagnostics'
 import { signInWithGoogle } from '../services/supabase'
 import { prepareImageForAnalysis, revokeImagePreview } from '../utils/imagePerformance'
+import { emitMealSaved } from '../utils/mealEvents'
 import AnalysisScreen from './AnalysisScreen'
 import ResultsScreen from './ResultsScreen'
 
@@ -164,7 +165,7 @@ export default function CameraModal({
         return
       }
 
-      uploadImageRef.current = preparedImage.dataUrl
+      uploadImageRef.current = preparedImage
       setPreviewUrl(preparedImage.previewUrl)
       console.info('[CalCheck] PHOTO_COMPRESSION_SUCCESS', {
         source: sourceLabel,
@@ -261,7 +262,10 @@ export default function CameraModal({
       'save meal flow',
       async () => {
         await getOrCreateUserProfile(user.id, user.email)
-        return saveMealLog(user.id, mealResult)
+        return saveMealLog(user.id, mealResult, {
+          image: uploadImageRef.current,
+          source: retrySourceLabelRef.current
+        })
       },
       {
         onLongRequest: (message) => setRequestNotice(message)
@@ -273,6 +277,7 @@ export default function CameraModal({
       local_date: savedMeal?.local_date,
       meal_type: savedMeal?.meal_type
     })
+    emitMealSaved(savedMeal)
     clearPendingMeal()
     onMealSaved?.(savedMeal)
     handleClose()
@@ -522,6 +527,7 @@ export async function restorePendingMeal(user, onMealSaved) {
       local_date: savedMeal?.local_date,
       meal_type: savedMeal?.meal_type
     })
+    emitMealSaved(savedMeal)
     clearPendingMeal()
     onMealSaved?.(savedMeal)
     return true
