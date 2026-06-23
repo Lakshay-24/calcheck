@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 import { recordError, recordPerformanceMetric, trackApiRequest } from './diagnostics'
 import { formatBytes, getDataUrlByteSize } from '../utils/imagePerformance'
 import { getErrorMessage, logSafeError } from '../utils/errorUtils'
+import { logAppError } from '../utils/appDiagnostics'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK_AI === 'true'
 const NUTRIENT_KEYS = [
@@ -180,6 +181,10 @@ export const analyzeFood = async (imageData) => {
 
   if (error) {
     logSafeError('EDGE_FUNCTION_FAILED', error, { operation: 'analyze-food' })
+    logAppError('EDGE_FUNCTION_FAILED', error, {
+      screen: 'scan',
+      operation: 'analyze-food'
+    })
     throw new Error(getErrorMessage(error, 'Failed to analyze food image. Please try again.'))
   }
 

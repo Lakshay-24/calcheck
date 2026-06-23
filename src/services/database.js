@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { trackApiRequest } from './diagnostics'
+import { logAppError, logAppEvent } from '../utils/appDiagnostics'
 import {
   getEndOfLocalDay,
   getEndOfLocalDate,
@@ -80,6 +81,16 @@ export const uploadMealImage = async (userId, mealId, imagePayload) => {
     image_path: imagePath,
     image_size_bytes: imagePayload.blob.size || null
   })
+  logAppEvent('MEAL_IMAGE_UPLOAD_START', {
+    user_id: userId,
+    level: 'info',
+    screen: 'scan',
+    operation: 'meal image upload',
+    metadata: {
+      meal_id: mealId,
+      image_size_bytes: imagePayload.blob.size || null
+    }
+  })
 
   const { error } = await trackApiRequest('meal image upload', () => supabase
     .storage
@@ -119,6 +130,19 @@ export const uploadMealImage = async (userId, mealId, imagePayload) => {
     image_height: imageFields.image_height,
     image_size_bytes: imageFields.image_size_bytes,
     has_public_url: Boolean(imageUrl)
+  })
+  logAppEvent('MEAL_IMAGE_UPLOAD_SUCCESS', {
+    user_id: userId,
+    level: 'info',
+    screen: 'scan',
+    operation: 'meal image upload',
+    metadata: {
+      meal_id: mealId,
+      image_width: imageFields.image_width,
+      image_height: imageFields.image_height,
+      image_size_bytes: imageFields.image_size_bytes,
+      has_public_url: Boolean(imageUrl)
+    }
   })
 
   return imageFields
@@ -181,7 +205,18 @@ export const saveMealLog = async (userId, mealData, options = {}) => {
     .insert(insertPayload)
     .select(MEAL_LOG_COLUMNS))
 
-  if (error) throw error
+  if (error) {
+    logAppError('MEAL_SAVE_FAILED', error, {
+      user_id: userId,
+      screen: 'scan',
+      operation: 'save meal',
+      metadata: {
+        has_nutrients_json: hasNutrients,
+        source: insertPayload.source || null
+      }
+    })
+    throw error
+  }
 
   const insertedMeal = data?.[0] || null
   console.info('[CalCheck] saveMealLog Supabase insert response', {
@@ -271,6 +306,12 @@ export const saveMealLog = async (userId, mealData, options = {}) => {
         meal_id: savedMeal.id,
         error: imageError?.message || String(imageError),
         code: imageError?.code || imageError?.status || null
+      })
+      logAppError('MEAL_IMAGE_UPLOAD_FAILED', imageError, {
+        user_id: userId,
+        screen: 'scan',
+        operation: 'meal image upload',
+        metadata: { meal_id: savedMeal.id }
       })
     }
   } else if (savedMeal?.id) {

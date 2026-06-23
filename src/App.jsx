@@ -7,6 +7,7 @@ import { recordStartupStep, trackApiRequest, trackStartupStep } from './services
 import { abortLifecycleRequests, recordAppLifecycleEvent } from './services/lifecycle'
 import { preloadRazorpayCheckout } from './services/subscriptions'
 import { logSafeError } from './utils/errorUtils'
+import { setDiagnosticsUser } from './utils/appDiagnostics'
 import ErrorBoundary from './Components/ErrorBoundary'
 import { ProgressSkeleton, ScreenSkeleton } from './Components/Skeletons'
 import './index.css'

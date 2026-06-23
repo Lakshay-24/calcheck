@@ -1,6 +1,6 @@
 const OPENAI_API_URL = 'https://api.openai.com/v1/responses'
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY')
-const OPENAI_VISION_MODEL = Deno.env.get('OPENAI_VISION_MODEL') || 'gpt-5.5'
+const OPENAI_FOOD_MODEL = Deno.env.get('OPENAI_FOOD_MODEL') || Deno.env.get('OPENAI_VISION_MODEL') || 'gpt-5.5'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -304,6 +304,10 @@ Deno.serve(async (request) => {
   }
 
   const imageUrl = `data:image/jpeg;base64,${base64Image}`
+  const analysisStartedAt = Date.now()
+  console.info('[CalCheck] ANALYZE_FOOD_MODEL_SELECTED', {
+    model: OPENAI_FOOD_MODEL
+  })
   let openAIResponse: Response | null = null
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -314,7 +318,7 @@ Deno.serve(async (request) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: OPENAI_VISION_MODEL,
+        model: OPENAI_FOOD_MODEL,
         input: [
           {
             role: 'user',
@@ -345,9 +349,11 @@ Deno.serve(async (request) => {
   if (!openAIResponse?.ok) {
     const status = openAIResponse?.status || 500
 
-    console.error('OpenAI analysis request failed', {
+    console.error('[CalCheck] ANALYZE_FOOD_FAILED', {
       status,
-      statusText: openAIResponse?.statusText
+      statusText: openAIResponse?.statusText,
+      duration_ms: Date.now() - analysisStartedAt,
+      model: OPENAI_FOOD_MODEL
     })
 
     return jsonResponse({ error: errorMessageForStatus(status) })
@@ -356,10 +362,17 @@ Deno.serve(async (request) => {
   const data = await openAIResponse.json()
 
   try {
-    return jsonResponse(parseOpenAIResponse(data))
+    const parsed = parseOpenAIResponse(data)
+    console.info('[CalCheck] ANALYZE_FOOD_DURATION_MS', {
+      duration_ms: Date.now() - analysisStartedAt,
+      model: OPENAI_FOOD_MODEL
+    })
+    return jsonResponse(parsed)
   } catch (error) {
-    console.error('OpenAI analysis response could not be parsed', {
-      message: error instanceof Error ? error.message : 'Unknown parse error'
+    console.error('[CalCheck] ANALYZE_FOOD_FAILED', {
+      message: error instanceof Error ? error.message : 'Unknown parse error',
+      duration_ms: Date.now() - analysisStartedAt,
+      model: OPENAI_FOOD_MODEL
     })
 
     return jsonResponse({

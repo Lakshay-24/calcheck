@@ -512,7 +512,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const proteinPercent = goals.protein ? Math.round((totals.protein / goals.protein) * 100) : 0
 
   return (
-    <div key={recoveryKey} className="h-full w-full bg-white overflow-y-auto pb-24">
+    <div key={recoveryKey} className="h-full w-full overflow-y-auto bg-[#FFF9F2] pb-24 text-[#151A22]">
       <CameraModal
         isOpen={cameraOpen}
         onClose={handleCloseModal}
@@ -538,19 +538,19 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         onUpgrade={handleUpgrade}
       />
 
-      <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 z-10">
+      <div className="sticky top-0 z-10 border-b border-[rgba(21,26,34,0.08)] bg-[#FFF9F2]/95 px-5 py-4 backdrop-blur-xl">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="text-2xl font-bold text-gray-900">Scan Food</h1>
-            <p className="text-sm text-gray-500 mt-1">Track your nutrition instantly</p>
+            <h1 className="text-[28px] font-black leading-tight tracking-normal text-[#151A22]">Scan Food</h1>
+            <p className="mt-0.5 text-sm font-semibold text-[#5F6978]">Track your nutrition instantly</p>
           </div>
           <InstallButton compact className="shrink-0 mt-0.5" />
         </div>
       </div>
 
-      <div className="px-6 py-6 space-y-6">
+      <div className="mx-auto max-w-3xl space-y-5 px-5 pb-8 pt-5">
         {saveNotice && (
-          <div className="bg-brand-50 border border-brand-300/60 rounded-xl p-3 text-sm text-brand-700">
+          <div className="rounded-[22px] border border-[#F1D79B] bg-[#FFF4D8] px-4 py-3 text-sm font-bold text-[#7A6849] shadow-[0_14px_36px_rgba(144,98,36,0.08)]">
             {saveNotice}
           </div>
         )}
@@ -571,7 +571,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           <button
             onClick={() => handleScanRequest('camera')}
             disabled={scanGateLoading}
-            className="w-full bg-gradient-to-r from-brand-400 to-brand-500 hover:from-brand-500 hover:to-brand-400 disabled:opacity-70 disabled:cursor-not-allowed text-brand-900 font-semibold py-4 px-6 rounded-2xl shadow-brand hover:shadow-lg transition-all duration-300 flex items-center justify-center gap-3 active:scale-95"
+            className="w-full rounded-[24px] bg-[#151A22] px-6 py-4 font-black text-white shadow-[0_18px_42px_rgba(21,26,34,0.16)] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-70 flex items-center justify-center gap-3"
           >
             {scanGateLoading ? <Loader2 size={24} className="animate-spin" /> : <Camera size={24} />}
             <span>{scanGateLoading ? 'Checking access...' : 'Open Camera'}</span>
@@ -589,7 +589,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
             type="button"
             onClick={() => handleScanRequest('upload')}
             disabled={scanGateLoading}
-            className="w-full bg-gray-50 hover:bg-gray-100 border-2 border-gray-200 disabled:opacity-70 disabled:cursor-not-allowed text-gray-900 font-semibold py-4 px-6 rounded-2xl transition-all duration-300 flex items-center justify-center gap-3 active:scale-95"
+            className="w-full rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white px-6 py-4 font-black text-[#151A22] shadow-[0_14px_34px_rgba(21,26,34,0.06)] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-70 flex items-center justify-center gap-3"
           >
             <Upload size={24} />
             <span>Upload Image</span>
@@ -604,7 +604,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         </div>
 
         {user && !pro && (
-          <div className="bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
+          <div className="rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white px-4 py-3 shadow-[0_14px_34px_rgba(21,26,34,0.06)] flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-gray-900">Free scans</p>
               <p className="text-xs text-gray-500">{Math.min(lifetimeScans, FREE_SCAN_LIMIT)} of {FREE_SCAN_LIMIT} used</p>
@@ -619,9 +619,9 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           </div>
         )}
 
-        <div className="bg-gradient-to-br from-brand-50 to-transparent border border-brand-300/50 rounded-3xl p-6 space-y-6">
+        <div className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.08)] space-y-5">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-gray-900">Today's Progress</h2>
+            <h2 className="text-lg font-black text-[#151A22]">Today</h2>
             <span className="text-xs font-semibold text-brand-700 bg-brand-50 px-3 py-1 rounded-full">
               {formatLocalWeekday(new Date(), timezone)}
             </span>
@@ -656,14 +656,14 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 )}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-gray-600">Calories</span>
+              <span className="text-sm font-black text-[#5F6978]">Calories</span>
               <span className="text-sm font-bold text-gray-900">
                 {totals.calories} / {goals.calories}
               </span>
             </div>
-            <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-[#ECE7DD]">
               <div
-                className="bg-gradient-to-r from-brand-400 to-brand-500 h-full transition-all duration-500 rounded-full"
+                className="h-full rounded-full bg-gradient-to-r from-[#A7C4A0] to-[#6F9D74] transition-all duration-500"
                 style={{ width: `${Math.min(caloriePercent, 100)}%` }}
               />
             </div>
@@ -685,7 +685,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
             </div>
             <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
               <div
-                className="bg-gradient-to-r from-blue-400 to-blue-600 h-full transition-all duration-500 rounded-full"
+                className="h-full rounded-full bg-gradient-to-r from-[#D97B5A] to-[#F6D97A] transition-all duration-500"
                 style={{ width: `${Math.min(proteinPercent, 100)}%` }}
               />
             </div>
@@ -713,7 +713,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         {loading && meals.length === 0 ? (
           <MealHistorySkeleton />
         ) : meals.length === 0 ? (
-          <div className="text-center py-12">
+          <div className="rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white px-4 py-8 text-center shadow-[0_14px_36px_rgba(21,26,34,0.06)]">
             <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
               <span className="text-3xl">📷</span>
             </div>

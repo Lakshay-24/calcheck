@@ -164,7 +164,7 @@ export default function ProfileScreen({ user }) {
   }
 
   return (
-    <div className="h-full w-full bg-white overflow-y-auto pb-24">
+    <div className="h-full w-full overflow-y-auto bg-[#FFF9F2] pb-24 text-[#151A22]">
       <SignOutConfirmModal
         isOpen={showSignOutConfirm}
         loading={signingOut}
@@ -185,20 +185,20 @@ export default function ProfileScreen({ user }) {
         onCancelSubscription={handleCancelSubscription}
       />
 
-      <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4">
-        <h1 className="text-2xl font-bold text-gray-900">Profile</h1>
+      <div className="sticky top-0 z-10 border-b border-[rgba(21,26,34,0.08)] bg-[#FFF9F2]/95 px-5 py-4 backdrop-blur-xl">
+        <h1 className="text-[28px] font-black leading-tight tracking-normal text-[#151A22]">Profile</h1>
         <button
           type="button"
           onClick={handleDiagnosticsTap}
-          className="text-sm text-gray-500 mt-1"
+          className="mt-0.5 text-sm font-semibold text-[#5F6978]"
           aria-label="Your account"
         >
           Your account
         </button>
       </div>
 
-      <div className="px-6 py-6 space-y-6">
-        <div className="bg-gradient-to-br from-brand-50 to-white border border-brand-300/50 rounded-2xl p-6">
+      <div className="mx-auto max-w-3xl space-y-5 px-5 pb-8 pt-5">
+        <div className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.08)]">
           <div className="w-16 h-16 bg-gradient-to-br from-brand-400 to-brand-500 rounded-full flex items-center justify-center text-brand-900 text-2xl font-bold mb-4 shadow-brand">
             {user?.email?.[0]?.toUpperCase() || '?'}
           </div>
@@ -221,7 +221,7 @@ export default function ProfileScreen({ user }) {
 
         {diagnosticsVisible && <DiagnosticsPanel diagnostics={diagnostics} />}
 
-        <div className="bg-gray-50 rounded-2xl p-4 space-y-2">
+        <div className="rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white p-4 shadow-[0_14px_36px_rgba(21,26,34,0.06)] space-y-2">
           <p className="text-sm font-semibold text-gray-700">Account</p>
           <p className="text-sm text-gray-500">
             Meals are saved to your account and synced across sessions.
@@ -233,7 +233,7 @@ export default function ProfileScreen({ user }) {
         <button
           onClick={() => setShowSignOutConfirm(true)}
           disabled={signingOut}
-          className="w-full flex items-center justify-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-900 font-semibold py-4 px-6 rounded-2xl transition-all active:scale-95 disabled:opacity-70"
+          className="w-full flex items-center justify-center gap-2 rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white px-6 py-4 font-black text-[#5F6978] shadow-[0_14px_34px_rgba(21,26,34,0.06)] transition active:scale-95 disabled:opacity-70"
         >
           <LogOut size={20} />
           {signingOut ? 'Signing out...' : 'Sign Out'}
@@ -388,7 +388,7 @@ function InfoLinksCard() {
   ]
 
   return (
-    <div className="bg-white border border-gray-200 rounded-2xl p-4">
+    <div className="rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white p-4 shadow-[0_14px_36px_rgba(21,26,34,0.06)]">
       <p className="text-sm font-semibold text-gray-700">Legal and Help</p>
       <div className="mt-3 divide-y divide-gray-100">
         {links.map((link) => (
@@ -546,7 +546,7 @@ function SubscriptionCard({ profile, profileLoading, loading, error, notice, onS
   const billingAmount = formatBillingAmount(profile)
 
   return (
-    <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-[0_14px_34px_rgba(16,42,42,0.05)]">
+    <div className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.08)]">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-gray-500">Current Plan</p>
@@ -638,7 +638,7 @@ function SubscriptionCard({ profile, profileLoading, loading, error, notice, onS
 
 function SubscriptionCardSkeleton() {
   return (
-    <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-[0_14px_34px_rgba(16,42,42,0.05)] animate-pulse">
+    <div className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.08)] animate-pulse">
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-3">
           <div className="h-4 w-24 rounded bg-gray-100" />

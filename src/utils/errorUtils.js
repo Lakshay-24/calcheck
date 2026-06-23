@@ -1,3 +1,4 @@
+import { logAppError } from './appDiagnostics'
 const DEFAULT_ERROR_MESSAGE = 'Something went wrong. Please try again.'
 const NETWORK_ERROR_MESSAGE = 'Network issue. Please check your connection and try again.'
 const TIMEOUT_ERROR_MESSAGE = 'This is taking longer than expected. Please try again.'
@@ -85,6 +86,15 @@ export const logSafeError = (label, error, extra = {}) => {
   } else {
     console.error(`[CalCheck] ${eventName}`, payload)
   }
+
+  logAppError(label || eventName, error, {
+    ...extra,
+    level: normalized.aborted ? 'info' : normalized.network || normalized.timeout ? 'warn' : 'error',
+    message: payload.message,
+    normalized_message: payload.userMessage,
+    error_code: payload.code,
+    metadata: payload
+  })
 
   return normalized
 }

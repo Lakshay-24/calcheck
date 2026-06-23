@@ -1,3 +1,4 @@
+import { logAppError, logAppEvent } from '../utils/appDiagnostics'
 const DIAGNOSTICS_KEY = 'calcheck-diagnostics'
 const LONG_REQUEST_MS = 15000
 const MAX_REQUESTS = 12
@@ -92,6 +93,13 @@ export const recordError = (requestName, error) => {
   })
 
   console.error('[CalCheck] API error', serialized)
+  logAppError('SUPABASE_OPERATION_FAILED', error, {
+    level: 'error',
+    operation: requestName,
+    message: serialized.message,
+    error_code: serialized.code,
+    metadata: { requestName }
+  })
 }
 
 export const recordImageDiagnostics = (details) => {
@@ -123,6 +131,14 @@ export const recordPerformanceMetric = (name, details = {}) => {
   })
 
   console.info('[CalCheck] performance metric', entry)
+  if (/FAILED|ERROR|TIMEOUT|STALE|ABORTED|SUPPRESSED|NOOP/i.test(name)) {
+    logAppEvent(name, {
+      level: /FAILED|ERROR|TIMEOUT/i.test(name) ? 'warn' : 'info',
+      operation: details.operation || name,
+      duration_ms: details.durationMs || details.duration_ms || null,
+      metadata: details
+    })
+  }
 }
 
 export const recordStartupStep = (entry) => {
@@ -162,6 +178,13 @@ export const recordLifecycleEvent = (name, details = {}) => {
   })
 
   console.info('[CalCheck] lifecycle event', entry)
+  if (/resume|restart|stale|abort|timeout|failed|error/i.test(name)) {
+    logAppEvent('PWA_LIFECYCLE_EVENT', {
+      level: /failed|error|timeout/i.test(name) ? 'warn' : 'info',
+      operation: name,
+      metadata: entry
+    })
+  }
 }
 
 export const trackStartupStep = async (

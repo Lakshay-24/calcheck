@@ -15,8 +15,8 @@ export default function BottomNav() {
   const isActive = (path) => location.pathname === path
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-0">
-      <div className="flex justify-around items-center h-20 max-w-2xl mx-auto">
+    <nav className="fixed bottom-0 left-0 right-0 border-t border-[rgba(21,26,34,0.08)] bg-[#FFF9F2]/95 px-3 backdrop-blur-xl">
+      <div className="mx-auto flex h-20 max-w-2xl items-center justify-around gap-2">
         {tabs.map((tab) => {
           const Icon = tab.icon
           const active = isActive(tab.path)
@@ -25,25 +25,21 @@ export default function BottomNav() {
             <button
               key={tab.id}
               onClick={() => navigate(tab.path)}
-              className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 transition-all duration-300 relative group ${
+              className={`relative flex flex-1 flex-col items-center justify-center gap-1 rounded-[22px] py-3 transition-all duration-300 ${
                 active
-                  ? 'text-brand-700'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? 'bg-white text-[#151A22] shadow-[0_10px_28px_rgba(21,26,34,0.08)]'
+                  : 'text-[#5F6978] hover:text-[#151A22]'
               }`}
             >
               {/* Icon */}
               <div className="relative">
                 <Icon
-                  size={28}
+                  size={24}
                   className={`transition-all duration-300 ${
-                    active ? 'scale-110' : 'scale-100'
+                    active ? 'scale-105' : 'scale-100'
                   }`}
-                  fill={active ? 'currentColor' : 'none'}
+                  
                 />
-                {/* Active indicator dot */}
-                {active && (
-                  <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-brand-500 rounded-full"></div>
-                )}
               </div>
 
               {/* Label */}
@@ -54,18 +50,13 @@ export default function BottomNav() {
               >
                 {tab.label}
               </span>
-
-              {/* Active background indicator */}
-              {active && (
-                <div className="absolute inset-0 bg-brand-50 -z-10 rounded-2xl opacity-0"></div>
-              )}
             </button>
           )
         })}
       </div>
 
       {/* Safe area for devices with notches/home indicators */}
-      <div className="h-safe-bottom bg-white"></div>
+      <div className="h-safe-bottom bg-[#FFF9F2]"></div>
     </nav>
   )
 }

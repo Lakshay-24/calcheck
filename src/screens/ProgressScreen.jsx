@@ -1,10 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { logAppEvent } from '../utils/appDiagnostics'
 import {
-  getMealLogsToday,
   getMealLogsForLocalDateRange,
   getFirstMealLog,
-  calculateDailyTotals,
   calculateWeeklyBreakdown,
   getUserProfile
 } from '../services/database'
@@ -18,14 +16,12 @@ import { MealCard, MealDetailSheet } from '../Components/MealCard'
 
 const PROGRESS_LOAD_TIMEOUT_MS = 5000
 const DEFAULT_GOALS = { calories: 2500, protein: 150 }
-const REFRESH_WARNING_MESSAGE = "Couldn't refresh progress. Your last saved data is still shown."
+const REFRESH_WARNING_MESSAGE = 'Check your connection and try again.'
 
 export default function ProgressScreen({ user, resumeSignal = 0 }) {
   const loadRequestRef = useRef(0)
   const activeLoadRef = useRef(null)
-  const progressSnapshotRef = useRef({ todayCount: 0, weeklyDays: 0 })
-  const [todayTotals, setTodayTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
-  const [todayMeals, setTodayMeals] = useState([])
+  const progressSnapshotRef = useRef({ weeklyCount: 0, weeklyDays: 0 })
   const [weeklyBreakdown, setWeeklyBreakdown] = useState({})
   const [weeklyTotals, setWeeklyTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 })
   const [weeklyMeals, setWeeklyMeals] = useState([])
@@ -36,14 +32,15 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
   const [slowNotice, setSlowNotice] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [selectedMeal, setSelectedMeal] = useState(null)
+  const weeklyMealsSectionRef = useRef(null)
   const timezone = getUserTimezone()
 
   useEffect(() => {
     progressSnapshotRef.current = {
-      todayCount: todayMeals.length,
+      weeklyCount: weeklyMeals.length,
       weeklyDays: Object.keys(weeklyBreakdown).length
     }
-  }, [todayMeals.length, weeklyBreakdown])
+  }, [weeklyMeals.length, weeklyBreakdown])
 
   const loadProgress = useCallback(async (reason = 'screen-load', options = {}) => {
     if (!user?.id) {
@@ -84,19 +81,10 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
         blocksRender: false
       })
 
-      const [todayLogs, profile, firstMeal] = await withProgressTimeout(
+      const [profile, firstMeal] = await withProgressTimeout(
         trackApiRequest(
           'progress base data load',
           () => Promise.all([
-            trackStartupStep(
-              'progress today history query',
-              () => getMealLogsToday(user.id, timezone, { signal: lifecycleRequest.signal }),
-              {
-                blocksRender: true,
-                timeoutMs: PROGRESS_LOAD_TIMEOUT_MS,
-                fallbackValue: null
-              }
-            ),
             trackStartupStep('progress profile query', () => getUserProfile(user.id, { signal: lifecycleRequest.signal }).catch(() => null), {
               blocksRender: true,
               timeoutMs: PROGRESS_LOAD_TIMEOUT_MS,
@@ -119,13 +107,6 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
         lifecycleRequest
       )
 
-      if (!Array.isArray(todayLogs)) {
-        console.warn('[CalCheck] PROGRESS_FALLBACK_USED', {
-          reason: 'today-logs-unavailable',
-          kept_previous_data: true
-        })
-        throw new Error('Could not refresh today progress. Please retry.')
-      }
 
       const accountCreatedAt = profile?.created_at || user?.created_at || null
       const firstMealAnchor = firstMeal?.fallback_anchor_date || firstMeal?.timestamp || null
@@ -193,9 +174,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
 
       const calculationStart = performance.now()
       const calculationStartTime = new Date().toISOString()
-      const safeTodayLogs = Array.isArray(todayLogs) ? todayLogs : []
       const safeWeekLogs = Array.isArray(weekLogs) ? weekLogs : []
-      const nextTodayTotals = calculateDailyTotals(safeTodayLogs)
       const nextWeeklyBreakdown = calculateWeeklyBreakdown(safeWeekLogs, timezone)
       const nextWeeklyTotals = calculateWeeklyTotals(safeWeekLogs)
       const nextGoals = profile
@@ -206,12 +185,6 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
         : DEFAULT_GOALS
       const weeklyCaloriePercent = getPercent(nextWeeklyTotals.calories, nextGoals.calories * 7)
       const weeklyProteinPercent = getPercent(nextWeeklyTotals.protein, nextGoals.protein * 7)
-      console.info('[CalCheck] PROGRESS_TODAY_LOGS_COUNT', {
-        count: safeTodayLogs.length,
-        timezone
-      })
-      console.info('[CalCheck] PROGRESS_TODAY_TOTALS', nextTodayTotals)
-      compareAgainstScanTodayTotals(nextTodayTotals, getLocalDate(new Date(), timezone))
       console.info('[CalCheck] PROGRESS_WEEK_LOGS_COUNT', {
         count: safeWeekLogs.length,
         week_start: nextWeekRange.startLocalDate,
@@ -263,12 +236,9 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
         durationMs: Math.round(performance.now() - calculationStart),
         success: true,
         blocksRender: true,
-        todayCount: safeTodayLogs.length,
         weekCount: safeWeekLogs.length
       })
 
-      setTodayMeals(safeTodayLogs)
-      setTodayTotals(nextTodayTotals)
       setWeeklyBreakdown(nextWeeklyBreakdown)
       setWeeklyTotals(nextWeeklyTotals)
       setWeeklyMeals(safeWeekLogs)
@@ -287,7 +257,6 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
       console.info('[CalCheck] data refresh completed', { screen: 'progress', reason })
       if (reason === 'meal-saved') {
         console.info('[CalCheck] PROGRESS_REFRESH_AFTER_SAVE_SUCCESS', {
-          today_count: safeTodayLogs.length,
           week_count: safeWeekLogs.length
         })
       }
@@ -307,10 +276,18 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
       console.info('[CalCheck] PROGRESS_STALE_DATA_PRESERVED', {
         reason,
         kept_previous_data: hasStaleData,
-        today_count: progressSnapshotRef.current.todayCount,
+        weekly_count: progressSnapshotRef.current.weeklyCount,
         weekly_days: progressSnapshotRef.current.weeklyDays
       })
-      setLoadError(REFRESH_WARNING_MESSAGE)
+      if (hasStaleData && reason !== 'manual-retry') {
+        console.info('[CalCheck] PROGRESS_REFRESH_WARNING_SUPPRESSED', {
+          reason,
+          kept_previous_data: true
+        })
+        setLoadError(null)
+      } else {
+        setLoadError(REFRESH_WARNING_MESSAGE)
+      }
       if (reason === 'meal-saved') {
         console.warn('[CalCheck] PROGRESS_REFRESH_AFTER_SAVE_FAILED', {
           error: normalizedMessage,
@@ -357,15 +334,6 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
       if (!savedMeal || savedMeal.user_id !== user.id) return
 
       const mealLocalDate = getMealLocalDate(savedMeal, timezone)
-      const todayLocalDate = getLocalDate(new Date(), timezone)
-
-      if (mealLocalDate === todayLocalDate) {
-        setTodayMeals((currentMeals) => {
-          const nextMeals = mergeMeal(currentMeals, savedMeal)
-          setTodayTotals(calculateDailyTotals(nextMeals))
-          return nextMeals
-        })
-      }
 
       if (weekRange && mealLocalDate >= weekRange.startLocalDate && mealLocalDate <= weekRange.endLocalDate) {
         setWeeklyMeals((currentMeals) => {
@@ -389,14 +357,22 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
       console.info('[CalCheck] PROGRESS_STALE_DATA_PRESERVED', {
         reason: 'loading-timeout',
         kept_previous_data: hasStaleData,
-        today_count: progressSnapshotRef.current.todayCount,
+        weekly_count: progressSnapshotRef.current.weeklyCount,
         weekly_days: progressSnapshotRef.current.weeklyDays
       })
       loadRequestRef.current += 1
       activeLoadRef.current?.abort('progress loading timeout')
       activeLoadRef.current = null
       setSlowNotice(null)
-      setLoadError(REFRESH_WARNING_MESSAGE)
+      if (hasStaleData) {
+        console.info('[CalCheck] PROGRESS_REFRESH_WARNING_SUPPRESSED', {
+          reason: 'loading-timeout',
+          kept_previous_data: true
+        })
+        setLoadError(null)
+      } else {
+        setLoadError(REFRESH_WARNING_MESSAGE)
+      }
       setLoading(false)
       setRecoveryKey((value) => value + 1)
     }, 5000)
@@ -412,17 +388,11 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
     [weeklyMeals, timezone]
   )
 
-  const caloriePercent = goals.calories
-    ? getPercent(todayTotals.calories, goals.calories)
-    : 0
-  const proteinPercent = goals.protein
-    ? getPercent(todayTotals.protein, goals.protein)
-    : 0
   const weeklyCalorieTarget = goals.calories * 7
   const weeklyProteinTarget = goals.protein * 7
   const weeklyCaloriePercent = getPercent(weeklyTotals.calories, weeklyCalorieTarget)
   const weeklyProteinPercent = getPercent(weeklyTotals.protein, weeklyProteinTarget)
-  const showSkeleton = loading && !hasProgressSnapshot(todayMeals, weeklyBreakdown)
+  const showSkeleton = loading && !hasProgressSnapshot(weeklyMeals, weeklyBreakdown)
   const showRefreshing = loading && !showSkeleton
   const showWeeklyEmpty = !loading && !loadError && weeklyTotals.count === 0
 
@@ -437,19 +407,18 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
 
   useEffect(() => {
     console.info('[CalCheck] PROGRESS_UI_REDESIGN_RENDERED', {
-      today_meals: todayMeals.length,
       weekly_meals: weeklyTotals.count,
       refreshing: showRefreshing
     })
-  }, [showRefreshing, todayMeals.length, weeklyTotals.count])
+  }, [showRefreshing, weeklyTotals.count])
 
   useEffect(() => {
     if (!loadError) return
     console.info('[CalCheck] PROGRESS_REFRESH_WARNING_RENDERED', {
-      kept_previous_data: hasProgressSnapshot(todayMeals, weeklyBreakdown),
+      kept_previous_data: hasProgressSnapshot(weeklyMeals, weeklyBreakdown),
       message: REFRESH_WARNING_MESSAGE
     })
-  }, [loadError, todayMeals, weeklyBreakdown])
+  }, [loadError, weeklyMeals, weeklyBreakdown])
 
   if (showSkeleton) {
     return <ProgressDashboardSkeleton slowNotice={slowNotice} onRetry={() => loadProgress('manual-retry')} />
@@ -460,21 +429,12 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
       <ProgressHeader refreshing={showRefreshing} />
 
       <main className="mx-auto max-w-3xl space-y-5 px-5 pb-8 pt-5">
-        {(slowNotice || loadError) && (
+        {loadError && (
           <RefreshWarning
             message={loadError || 'This is taking longer than expected. Try again.'}
             onRetry={() => loadProgress('manual-retry')}
           />
         )}
-
-        <TodayDashboardCard
-          totals={todayTotals}
-          mealsCount={todayMeals.length}
-          goals={goals}
-          caloriePercent={caloriePercent}
-          proteinPercent={proteinPercent}
-        />
-
         <WeekDashboardCard
           totals={weeklyTotals}
           weekRange={weekRange}
@@ -492,6 +452,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
           showEmpty={showWeeklyEmpty}
           isRefreshing={showRefreshing}
           onSelectMeal={setSelectedMeal}
+          sectionRef={weeklyMealsSectionRef}
         />
       </main>
 
@@ -536,8 +497,8 @@ function RefreshWarning({ message, onRetry }) {
   return (
     <section className="flex items-center justify-between gap-3 rounded-[22px] border border-[#F1D79B] bg-[#FFF4D8] px-4 py-3 shadow-[0_14px_36px_rgba(144,98,36,0.08)]">
       <div className="min-w-0">
-        <p className="text-sm font-black text-[#151A22]">Couldn't refresh progress</p>
-        <p className="mt-0.5 text-xs font-semibold text-[#7A6849]">{message || 'Your last saved data is still shown.'}</p>
+        <p className="text-sm font-black text-[#151A22]">Couldn't refresh</p>
+        <p className="mt-0.5 text-xs font-semibold text-[#7A6849]">{message || 'Check your connection and try again.'}</p>
       </div>
       <button
         type="button"
@@ -546,44 +507,6 @@ function RefreshWarning({ message, onRetry }) {
       >
         Retry
       </button>
-    </section>
-  )
-}
-
-function TodayDashboardCard({ totals, mealsCount, goals, caloriePercent, proteinPercent }) {
-  const hasMeals = mealsCount > 0
-
-  return (
-    <section className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.08)]">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-black text-[#151A22]">Today</p>
-          {hasMeals ? (
-            <p className="mt-1 text-xs font-semibold text-[#5F6978]">{mealsCount} meal{mealsCount !== 1 ? 's' : ''} logged</p>
-          ) : (
-            <p className="mt-1 text-xs font-semibold text-[#5F6978]">Scan your first meal to start today.</p>
-          )}
-        </div>
-        <CalorieRing percent={caloriePercent} value={totals.calories} target={goals.calories} />
-      </div>
-
-      {hasMeals ? (
-        <div className="mt-5 grid grid-cols-3 gap-3">
-          <MetricPill label="Calories" value={formatNumber(totals.calories)} detail={`/ ${formatNumber(goals.calories)} kcal`} />
-          <MetricPill label="Protein" value={`${formatNumber(totals.protein)}g`} detail={`/ ${formatNumber(goals.protein)}g`} />
-          <MetricPill label="Meals" value={mealsCount} detail="logged" />
-        </div>
-      ) : (
-        <div className="mt-5 rounded-[22px] bg-[#F7F4EE] px-4 py-4">
-          <p className="text-lg font-black text-[#151A22]">No meals yet</p>
-          <p className="mt-1 text-sm font-semibold text-[#5F6978]">Scan your first meal to start today.</p>
-        </div>
-      )}
-
-      <div className="mt-5 space-y-3">
-        <SoftProgressLine label="Calories" percent={caloriePercent} value={`${formatNumber(totals.calories)} / ${formatNumber(goals.calories)} kcal`} tone="sage" />
-        <SoftProgressLine label="Protein" percent={proteinPercent} value={`${formatNumber(totals.protein)}g / ${formatNumber(goals.protein)}g`} tone="warm" />
-      </div>
     </section>
   )
 }
@@ -612,25 +535,6 @@ function WeekDashboardCard({ totals, weekRange, calorieTarget, proteinTarget, ca
         <SoftProgressLine dark label="Protein" percent={proteinPercent} value={`${formatNumber(totals.protein)}g / ${formatNumber(proteinTarget)}g`} tone="amber" />
       </div>
     </section>
-  )
-}
-
-function CalorieRing({ percent, value, target }) {
-  const capped = Math.min(percent, 100)
-
-  return (
-    <div
-      className="grid h-[86px] w-[86px] shrink-0 place-items-center rounded-full shadow-[inset_0_0_0_1px_rgba(21,26,34,0.08)] motion-safe:transition-all motion-safe:duration-700"
-      style={{ background: `conic-gradient(#6F9D74 ${capped}%, #F0ECE4 ${capped}% 100%)` }}
-      aria-label={`Calories ${value} of ${target}`}
-    >
-      <div className="grid h-[68px] w-[68px] place-items-center rounded-full bg-white text-center">
-        <div>
-          <p className="text-lg font-black leading-none text-[#151A22]">{Math.min(capped, 100)}%</p>
-          <p className="mt-1 text-[10px] font-black uppercase text-[#5F6978]">kcal</p>
-        </div>
-      </div>
-    </div>
   )
 }
 
@@ -793,17 +697,31 @@ function ChipGroup({ title, items, tone }) {
   )
 }
 
-function MealPreviewSection({ meals, timezone, showEmpty, isRefreshing, onSelectMeal }) {
+function MealPreviewSection({ meals, timezone, showEmpty, isRefreshing, onSelectMeal, sectionRef }) {
+  const handleViewMeals = () => {
+    sectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    console.info('[CalCheck] VIEW_LOGGED_MEALS_SCROLL', { target: 'weekly-meals' })
+    logAppEvent('VIEW_LOGGED_MEALS_SCROLL', {
+      level: 'info',
+      screen: 'progress',
+      operation: 'scroll weekly meals',
+      metadata: { meal_count: meals.length }
+    })
+  }
   return (
-    <section className="space-y-3">
+    <section ref={sectionRef} className="scroll-mt-24 space-y-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-black text-[#151A22]">This Week's Meals</h2>
           <p className="text-xs font-semibold text-[#5F6978]">Photos and summaries from your saved meals</p>
         </div>
-        <Link to="/" className="rounded-full bg-white px-3 py-2 text-xs font-black text-[#365C3B] shadow-[0_10px_24px_rgba(21,26,34,0.06)]">
-          View all
-        </Link>
+        <button
+          type="button"
+          onClick={handleViewMeals}
+          className="rounded-full bg-white px-3 py-2 text-xs font-black text-[#365C3B] shadow-[0_10px_24px_rgba(21,26,34,0.06)] transition active:scale-95"
+        >
+          View meals
+        </button>
       </div>
 
       <div className="space-y-3">
@@ -869,12 +787,12 @@ function SkeletonCard({ className = '', dark = false }) {
 function formatNumber(value) {
   return Math.round(Number(value || 0)).toLocaleString('en-US')
 }
-function hasProgressSnapshot(todayMeals, weeklyBreakdown) {
-  return todayMeals.length > 0 || Object.keys(weeklyBreakdown).length > 0
+function hasProgressSnapshot(weeklyMeals, weeklyBreakdown) {
+  return weeklyMeals.length > 0 || Object.keys(weeklyBreakdown).length > 0
 }
 
 function hasProgressSnapshotRef(snapshot) {
-  return (snapshot?.todayCount || 0) > 0 || (snapshot?.weeklyDays || 0) > 0
+  return (snapshot?.weeklyCount || 0) > 0 || (snapshot?.weeklyDays || 0) > 0
 }
 
 function calculateWeeklyTotals(mealLogs) {
@@ -897,31 +815,6 @@ function mergeMeal(mealLogs, savedMeal) {
 
 function getMealLocalDate(meal, timezone) {
   return meal?.local_date || getLocalDate(parseDatabaseTimestamp(meal?.timestamp), meal?.timezone || timezone)
-}
-
-function compareAgainstScanTodayTotals(progressTotals, localDate) {
-  if (typeof localStorage === 'undefined') return
-
-  try {
-    const raw = localStorage.getItem('calcheck-scan-today-totals')
-    if (!raw) return
-    const scanSnapshot = JSON.parse(raw)
-    if (scanSnapshot.localDate !== localDate) return
-    const scanTotals = scanSnapshot.totals || {}
-    const mismatch = ['calories', 'protein', 'carbs', 'fat'].some(
-      (key) => Number(scanTotals[key] || 0) !== Number(progressTotals[key] || 0)
-    )
-
-    if (mismatch) {
-      console.warn('[CalCheck] PROGRESS_DATA_MISMATCH', {
-        local_date: localDate,
-        scan_totals: scanTotals,
-        progress_totals: progressTotals
-      })
-    }
-  } catch {
-    // Diagnostics-only comparison.
-  }
 }
 
 function normalizeGoal(value, fallback) {
