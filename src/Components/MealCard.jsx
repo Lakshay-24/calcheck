@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { ImageIcon, Loader2, Share2, X } from 'lucide-react'
 import { formatLocalTime, getUserTimezone, parseDatabaseTimestamp } from '../utils/timezone'
+import { getErrorMessage, logSafeError } from '../utils/errorUtils'
 
 export function MealCard({ meal, timezone = getUserTimezone(), onClick, compact = false }) {
   const imageSrc = getMealImageSrc(meal)
@@ -76,9 +77,10 @@ export function MealDetailSheet({ meal, user, timezone = getUserTimezone(), onCl
       }
       setShareState({ loading: false, error: null, notice: 'Image downloaded' })
     } catch (error) {
+      logSafeError('APP_ERROR_NORMALIZED', error, { operation: 'share meal card' })
       setShareState({
         loading: false,
-        error: error?.message || 'Could not share this meal.',
+        error: getErrorMessage(error, 'Could not share this meal.'),
         notice: null
       })
     }

@@ -12,6 +12,7 @@ import { recordPerformanceMetric, recordStartupStep, trackApiRequest, trackStart
 import { createLifecycleAbortController, getLifecycleGeneration, recordAppLifecycleEvent } from '../services/lifecycle'
 import { getLocalDate, getUserTimezone, getUserWeekRange, parseDatabaseTimestamp } from '../utils/timezone'
 import { onMealSaved } from '../utils/mealEvents'
+import { getErrorMessage, logSafeError } from '../utils/errorUtils'
 import { getNutritionQuality } from '../utils/nutritionQuality'
 import { MealCard, MealDetailSheet } from '../Components/MealCard'
 
@@ -296,13 +297,13 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
         durationMs: Math.round(performance.now() - loadStartedAt),
         success: false,
         blocksRender: true,
-        error: error?.message || String(error)
+        error: getErrorMessage(error)
       })
-      console.error('Error loading progress:', error)
-      setLoadError(error?.message || 'Could not load progress. Please retry.')
+      logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'progress', operation: 'load progress' })
+      setLoadError(getErrorMessage(error, 'Could not load progress. Please retry.'))
       if (reason === 'meal-saved') {
         console.warn('[CalCheck] PROGRESS_REFRESH_AFTER_SAVE_FAILED', {
-          error: error?.message || String(error)
+          error: getErrorMessage(error)
         })
       }
     } finally {

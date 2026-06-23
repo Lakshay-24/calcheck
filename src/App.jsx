@@ -6,15 +6,21 @@ import { getOrCreateUserProfile } from './services/database'
 import { recordStartupStep, trackApiRequest, trackStartupStep } from './services/diagnostics'
 import { abortLifecycleRequests, recordAppLifecycleEvent } from './services/lifecycle'
 import { preloadRazorpayCheckout } from './services/subscriptions'
+import { logSafeError } from './utils/errorUtils'
+import ErrorBoundary from './Components/ErrorBoundary'
+import { ProgressSkeleton, ScreenSkeleton } from './Components/Skeletons'
 import './index.css'
 
 import ScanScreen from './screens/ScanScreen'
 import OnboardingScreen from './screens/OnboardingScreen'
 import BottomNav from './Components/BottomNav'
 
-const ProgressScreen = lazy(() => import('./screens/ProgressScreen'))
-const ProfileScreen = lazy(() => import('./screens/ProfileScreen'))
-const InfoPage = lazy(() => import('./screens/InfoPage'))
+const preloadProgressScreen = () => import('./screens/ProgressScreen')
+const preloadProfileScreen = () => import('./screens/ProfileScreen')
+const preloadInfoPage = () => import('./screens/InfoPage')
+const ProgressScreen = lazy(preloadProgressScreen)
+const ProfileScreen = lazy(preloadProfileScreen)
+const InfoPage = lazy(preloadInfoPage)
 
 const profileSetupInFlight = new Set()
 const timedOutSessionFallback = { data: { session: null }, error: null, __calcheckTimedOut: true }
@@ -96,13 +102,11 @@ async function ensureUserProfile(user, source = 'unknown') {
       mode: 'ensure-user-profile'
     })
   } catch (error) {
-    console.error('[CalCheck] PROFILE_FETCH_FAILED', {
+    logSafeError('SUPABASE_OPERATION_FAILED', error, {
       source,
       user_id: user.id,
-      mode: 'ensure-user-profile',
-      error
+      mode: 'ensure-user-profile'
     })
-    console.error('Profile setup error:', { source, error })
   } finally {
     profileSetupInFlight.delete(user.id)
   }
@@ -147,6 +151,11 @@ function App() {
       window.setTimeout(() => {
         preloadRazorpayCheckout('app-ready-idle')
       }, 1500)
+      runWhenIdle(() => {
+        preloadProgressScreen()
+        preloadProfileScreen()
+        preloadInfoPage()
+      })
     }
   }, [loading])
 
@@ -346,12 +355,11 @@ function App() {
         preservedUserId: userRef.current?.id || null,
         error
       })
-      console.error('[CalCheck] USER_FETCH_FAILED', {
+      logSafeError('SUPABASE_OPERATION_FAILED', error, {
         source,
         checkId,
-        error
+        operation: 'auth check'
       })
-      console.error('[CalCheck] Auth check error:', error)
       if (!userRef.current?.id) {
         setAuthRestorePending(true)
       }
@@ -492,18 +500,12 @@ function App() {
   }, [loading, revalidateAuth])
 
   if (loading) {
-    return (
-      <div className="h-screen w-screen flex items-center justify-center bg-white">
-        <div className="text-center">
-          <div className="w-12 h-12 border-3 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-500">Loading...</p>
-        </div>
-      </div>
-    )
+    return <ScreenSkeleton />
   }
 
   return (
-    <Router>
+    <ErrorBoundary>
+      <Router>
       <div className="h-screen w-screen flex flex-col bg-white overflow-hidden">
         <div className="flex-1 overflow-y-auto">
           <Routes>
@@ -520,7 +522,7 @@ function App() {
               path="/progress"
               element={
                 user
-                  ? <LazyRouteFallback><ProgressScreen key={`progress-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} /></LazyRouteFallback>
+                  ? <LazyRouteFallback fallback={<ProgressSkeleton />}><ProgressScreen key={`progress-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} /></LazyRouteFallback>
                   : authRestorePending
                     ? <AuthRecoveryScreen />
                     : <Navigate to="/" />
@@ -541,7 +543,8 @@ function App() {
 
         {user && <BottomNav />}
       </div>
-    </Router>
+      </Router>
+    </ErrorBoundary>
   )
 }
 
@@ -556,28 +559,23 @@ function AuthRecoveryScreen() {
   )
 }
 
-function LazyRouteFallback({ children }) {
+function LazyRouteFallback({ children, fallback = <ScreenSkeleton /> }) {
   return (
-    <Suspense fallback={<RouteSkeleton />}>
+    <Suspense fallback={fallback}>
       {children}
     </Suspense>
   )
 }
 
-function RouteSkeleton() {
-  return (
-    <div className="h-full w-full bg-white overflow-hidden">
-      <div className="border-b border-gray-100 px-6 py-4">
-        <div className="h-8 w-36 rounded-xl bg-gray-100 animate-pulse" />
-        <div className="mt-2 h-4 w-48 rounded-lg bg-gray-100 animate-pulse" />
-      </div>
-      <div className="px-6 py-6 space-y-4">
-        <div className="h-36 rounded-2xl bg-gray-100 animate-pulse" />
-        <div className="h-24 rounded-2xl bg-gray-100 animate-pulse" />
-        <div className="h-24 rounded-2xl bg-gray-100 animate-pulse" />
-      </div>
-    </div>
-  )
+function runWhenIdle(task) {
+  if (typeof window === 'undefined') return
+
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(task, { timeout: 2500 })
+    return
+  }
+
+  window.setTimeout(task, 1200)
 }
 
 export default App

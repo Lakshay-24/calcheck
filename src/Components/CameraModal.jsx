@@ -5,6 +5,7 @@ import { saveMealLog, getOrCreateUserProfile } from '../services/database'
 import { recordPerformanceMetric, trackApiRequest } from '../services/diagnostics'
 import { signInWithGoogle } from '../services/supabase'
 import { prepareImageForAnalysis, revokeImagePreview } from '../utils/imagePerformance'
+import { getErrorMessage, logSafeError } from '../utils/errorUtils'
 import { emitMealSaved } from '../utils/mealEvents'
 import AnalysisScreen from './AnalysisScreen'
 import ResultsScreen from './ResultsScreen'
@@ -212,12 +213,11 @@ export default function CameraModal({
     } catch (err) {
       if (analysisRequestRef.current !== requestId) return
 
-      const message = err.message || 'Failed to analyze food image. Please try again.'
+      const message = getErrorMessage(err, 'Failed to analyze food image. Please try again.')
       const failedDuringCompression = currentPhase === 'photo-compression'
       const timeoutStage = message.includes('took too long') ? 'photo-compression' : 'analysis'
-      console.error(failedDuringCompression ? '[CalCheck] PHOTO_COMPRESSION_FAILED' : '[CalCheck] ANALYSIS_FAILED', {
-        source: sourceLabel,
-        error: err
+      logSafeError(failedDuringCompression ? 'PHOTO_COMPRESSION_FAILED' : 'EDGE_FUNCTION_FAILED', err, {
+        source: sourceLabel
       })
       console.error('[CalCheck] ANALYSIS_FLOW_ABORTED', {
         source: sourceLabel,
@@ -334,9 +334,9 @@ export default function CameraModal({
       await persistMeal(selectedMealResult)
       setRequestNotice(null)
     } catch (err) {
-      setError('Failed to save meal. Please try again.')
+      setError(getErrorMessage(err, 'Failed to save meal. Please try again.'))
       setRequestNotice(null)
-      console.error('Save error:', err)
+      logSafeError('SUPABASE_OPERATION_FAILED', err, { operation: 'save meal' })
     } finally {
       setIsSaving(false)
     }
@@ -532,7 +532,7 @@ export async function restorePendingMeal(user, onMealSaved) {
     onMealSaved?.(savedMeal)
     return true
   } catch (error) {
-    console.error('Failed to restore pending meal:', error)
+    logSafeError('SUPABASE_OPERATION_FAILED', error, { operation: 'restore pending meal' })
     return false
   }
 }

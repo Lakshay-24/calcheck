@@ -11,6 +11,7 @@ import {
 } from '../services/subscriptions'
 import { getDiagnosticsSnapshot, recordPerformanceMetric } from '../services/diagnostics'
 import { signOut } from '../services/supabase'
+import { getErrorMessage, logSafeError } from '../utils/errorUtils'
 
 export default function ProfileScreen({ user }) {
   const [signingOut, setSigningOut] = useState(false)
@@ -36,7 +37,7 @@ export default function ProfileScreen({ user }) {
     getUserProfile(user.id)
       .then(setProfile)
       .catch((error) => {
-        console.error('Profile subscription load error:', error)
+        logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'profile', operation: 'load subscription profile' })
       })
       .finally(() => setProfileLoading(false))
   }, [user?.id])
@@ -71,7 +72,7 @@ export default function ProfileScreen({ user }) {
       setSigningOut(true)
       await signOut()
     } catch (error) {
-      console.error('Sign out error:', error)
+      logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'profile', operation: 'sign out' })
     } finally {
       setSigningOut(false)
     }
@@ -114,7 +115,7 @@ export default function ProfileScreen({ user }) {
             setProfile(confirmedProfile)
             setSubscriptionNotice('CalCheck Pro is active.')
           } catch (error) {
-            setSubscriptionError(error?.message || 'Subscription confirmation is still pending.')
+            setSubscriptionError(getErrorMessage(error, 'Subscription confirmation is still pending.'))
           } finally {
             setSubscriptionLoading(false)
           }
@@ -125,8 +126,8 @@ export default function ProfileScreen({ user }) {
         }
       })
     } catch (error) {
-      console.error('Subscription checkout error:', error)
-      setSubscriptionError(error?.message || 'Could not start subscription.')
+      logSafeError('APP_ERROR_NORMALIZED', error, { screen: 'profile', operation: 'subscription checkout' })
+      setSubscriptionError(getErrorMessage(error, 'Could not start subscription.'))
       setSubscriptionNotice(null)
     } finally {
       setSubscriptionLoading(false)
@@ -141,7 +142,7 @@ export default function ProfileScreen({ user }) {
       if (result?.profile) setProfile(result.profile)
       setSubscriptionNotice('Subscription status refreshed.')
     } catch (error) {
-      setSubscriptionError(error?.message || 'Could not refresh subscription.')
+      setSubscriptionError(getErrorMessage(error, 'Could not refresh subscription.'))
     } finally {
       setSubscriptionLoading(false)
     }
@@ -155,7 +156,7 @@ export default function ProfileScreen({ user }) {
       if (result?.profile) setProfile(result.profile)
       setSubscriptionNotice('Subscription will cancel at the end of the billing period.')
     } catch (error) {
-      setSubscriptionError(error?.message || 'Could not cancel subscription.')
+      setSubscriptionError(getErrorMessage(error, 'Could not cancel subscription.'))
     } finally {
       setSubscriptionLoading(false)
       setCancelStep(null)

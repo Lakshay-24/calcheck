@@ -48,8 +48,24 @@ const writeDiagnostics = (next) => {
   }
 }
 
+const getSerializableErrorMessage = (error) => {
+  if (!error) return 'Unknown error'
+  if (typeof error === 'string') return error || 'Unknown error'
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error?.message === 'string' && error.message.trim()) return error.message
+  if (typeof error?.error === 'string' && error.error.trim()) return error.error
+  if (typeof error?.details === 'string' && error.details.trim()) return error.details
+
+  try {
+    const serialized = JSON.stringify(error)
+    return serialized && serialized !== '{}' ? serialized : 'Unknown error'
+  } catch {
+    return 'Unknown error'
+  }
+}
+
 const serializeError = (error) => ({
-  message: error?.message || String(error || 'Unknown error'),
+  message: getSerializableErrorMessage(error),
   name: error?.name || 'Error',
   code: error?.code || error?.status || null,
   timestamp: new Date().toISOString()

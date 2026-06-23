@@ -20,6 +20,7 @@ import { signInWithGoogle } from '../services/supabase'
 import { recordPerformanceMetric, trackApiRequest, trackStartupStep } from '../services/diagnostics'
 import { formatLocalWeekday, getLocalDate, getUserTimezone, parseDatabaseTimestamp } from '../utils/timezone'
 import { onMealSaved } from '../utils/mealEvents'
+import { getErrorMessage, logSafeError } from '../utils/errorUtils'
 import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
 
 const FREE_SCAN_LIMIT = 2
@@ -128,7 +129,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       }
       console.info('[CalCheck] data refresh completed', { screen: 'scan', reason })
     } catch (error) {
-      console.error('Error loading meals:', error)
+      logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'scan', operation: 'load meals' })
     } finally {
       if (loadRequestRef.current === requestId) {
         setLoading(false)
@@ -337,7 +338,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       recordPerformanceMetric('ANALYSIS_FLOW_ABORTED', {
         source,
         stage: 'access-check',
-        error: error?.message || String(error)
+        error: getErrorMessage(error)
       })
       if (error?.message?.includes('timed out')) {
         recordPerformanceMetric('ANALYSIS_FLOW_TIMEOUT', {
@@ -346,8 +347,8 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           timeoutMs: ACCESS_CHECK_TIMEOUT_MS
         })
       }
-      console.error('Failed to check scan access:', error)
-      setSaveNotice('Could not check scan access. Please try again.')
+      logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'scan', operation: 'check scan access' })
+      setSaveNotice(getErrorMessage(error, 'Could not check scan access. Please try again.'))
       setTimeout(() => setSaveNotice(null), 4000)
     } finally {
       scanGateInFlightRef.current = false
@@ -401,7 +402,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       const count = await getLifetimeScanCount(user.id)
       setLifetimeScans(count)
     } catch (error) {
-      console.error('Failed to update scan count:', error)
+      logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'scan', operation: 'update scan count' })
     }
   }
 
@@ -410,7 +411,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       setAuthLoading(true)
       await signInWithGoogle()
     } catch (error) {
-      console.error('Sign in error:', error)
+      logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'scan', operation: 'sign in' })
       setAuthLoading(false)
     }
   }
@@ -467,7 +468,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
             setTimeout(() => setProSuccessVisible(false), 5000)
             continuePendingScan()
           } catch (error) {
-            setUpgradeError(error?.message || 'Payment authorized. Waiting for subscription confirmation.')
+            setUpgradeError(getErrorMessage(error, 'Payment authorized. Waiting for subscription confirmation.'))
           } finally {
             setUpgradeLoading(false)
           }
@@ -478,9 +479,9 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         }
       })
     } catch (error) {
-      console.error('Upgrade error:', error)
+      logSafeError('APP_ERROR_NORMALIZED', error, { screen: 'scan', operation: 'upgrade' })
       setProfile(previousProfile)
-      setUpgradeError(error?.message || 'Could not activate Pro. Please try again.')
+      setUpgradeError(getErrorMessage(error, 'Could not activate Pro. Please try again.'))
       setUpgradeStatus(null)
     } finally {
       setUpgradeLoading(false)
