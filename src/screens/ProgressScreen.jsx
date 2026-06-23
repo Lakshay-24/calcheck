@@ -18,6 +18,7 @@ import { MealCard, MealDetailSheet } from '../Components/MealCard'
 
 const PROGRESS_LOAD_TIMEOUT_MS = 5000
 const DEFAULT_GOALS = { calories: 2500, protein: 150 }
+const REFRESH_WARNING_MESSAGE = "Couldn't refresh progress. Your last saved data is still shown."
 
 export default function ProgressScreen({ user, resumeSignal = 0 }) {
   const loadRequestRef = useRef(0)
@@ -291,19 +292,29 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
         })
       }
     } catch (error) {
+      const normalizedMessage = getErrorMessage(error, REFRESH_WARNING_MESSAGE)
+      const hasStaleData = hasProgressSnapshotRef(progressSnapshotRef.current)
       recordProgressStep('progress data load failed', {
         startTime: loadStartTime,
         endTime: new Date().toISOString(),
         durationMs: Math.round(performance.now() - loadStartedAt),
         success: false,
-        blocksRender: true,
-        error: getErrorMessage(error)
+        blocksRender: false,
+        error: normalizedMessage,
+        kept_previous_data: hasStaleData
       })
-      logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'progress', operation: 'load progress' })
-      setLoadError(getErrorMessage(error, 'Could not load progress. Please retry.'))
+      logSafeError('PROGRESS_ERROR_NORMALIZED', error, { screen: 'progress', operation: 'load progress' })
+      console.info('[CalCheck] PROGRESS_STALE_DATA_PRESERVED', {
+        reason,
+        kept_previous_data: hasStaleData,
+        today_count: progressSnapshotRef.current.todayCount,
+        weekly_days: progressSnapshotRef.current.weeklyDays
+      })
+      setLoadError(REFRESH_WARNING_MESSAGE)
       if (reason === 'meal-saved') {
         console.warn('[CalCheck] PROGRESS_REFRESH_AFTER_SAVE_FAILED', {
-          error: getErrorMessage(error)
+          error: normalizedMessage,
+          kept_previous_data: hasStaleData
         })
       }
     } finally {
@@ -373,10 +384,19 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
     if (!loading) return undefined
 
     const retryTimer = window.setTimeout(() => {
+      const hasStaleData = hasProgressSnapshotRef(progressSnapshotRef.current)
       console.warn('[CalCheck] loading timeout triggered', { screen: 'progress', seconds: 5 })
+      console.info('[CalCheck] PROGRESS_STALE_DATA_PRESERVED', {
+        reason: 'loading-timeout',
+        kept_previous_data: hasStaleData,
+        today_count: progressSnapshotRef.current.todayCount,
+        weekly_days: progressSnapshotRef.current.weeklyDays
+      })
       loadRequestRef.current += 1
       activeLoadRef.current?.abort('progress loading timeout')
       activeLoadRef.current = null
+      setSlowNotice(null)
+      setLoadError(REFRESH_WARNING_MESSAGE)
       setLoading(false)
       setRecoveryKey((value) => value + 1)
     }, 5000)
@@ -415,160 +435,66 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
     })
   }, [showWeeklyEmpty, weekRange?.endLocalDate, weekRange?.startLocalDate])
 
+  useEffect(() => {
+    console.info('[CalCheck] PROGRESS_UI_REDESIGN_RENDERED', {
+      today_meals: todayMeals.length,
+      weekly_meals: weeklyTotals.count,
+      refreshing: showRefreshing
+    })
+  }, [showRefreshing, todayMeals.length, weeklyTotals.count])
+
+  useEffect(() => {
+    if (!loadError) return
+    console.info('[CalCheck] PROGRESS_REFRESH_WARNING_RENDERED', {
+      kept_previous_data: hasProgressSnapshot(todayMeals, weeklyBreakdown),
+      message: REFRESH_WARNING_MESSAGE
+    })
+  }, [loadError, todayMeals, weeklyBreakdown])
+
   if (showSkeleton) {
-    return (
-      <div className="h-full w-full bg-white overflow-y-auto pb-24">
-        <ProgressHeader refreshing={false} />
-        <div className="px-6 py-6 space-y-6">
-          <SummarySkeleton />
-          <WeeklySkeleton />
-          <MacroSkeleton />
-        </div>
-        {slowNotice && (
-          <p className="mx-6 rounded-xl bg-yellow-50 border border-yellow-200 px-4 py-3 text-sm font-semibold text-yellow-800">
-            {slowNotice}
-          </p>
-        )}
-      </div>
-    )
+    return <ProgressDashboardSkeleton slowNotice={slowNotice} onRetry={() => loadProgress('manual-retry')} />
   }
 
   return (
-    <div key={recoveryKey} className="h-full w-full bg-white overflow-y-auto pb-24">
+    <div key={recoveryKey} className="h-full w-full overflow-y-auto bg-[#FFF9F2] pb-24 text-[#151A22]">
       <ProgressHeader refreshing={showRefreshing} />
 
-      <div className="px-6 py-6 space-y-6">
-        {slowNotice && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 text-sm font-semibold text-yellow-800">
-            {slowNotice}
-          </div>
+      <main className="mx-auto max-w-3xl space-y-5 px-5 pb-8 pt-5">
+        {(slowNotice || loadError) && (
+          <RefreshWarning
+            message={loadError || 'This is taking longer than expected. Try again.'}
+            onRetry={() => loadProgress('manual-retry')}
+          />
         )}
 
-        {loadError && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-3 flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-red-700">{loadError}</p>
-            <button
-              type="button"
-              onClick={() => loadProgress('manual-retry')}
-              className="shrink-0 text-sm font-semibold text-red-800 bg-white border border-red-200 rounded-lg px-3 py-2"
-            >
-              Retry
-            </button>
-          </div>
-        )}
+        <TodayDashboardCard
+          totals={todayTotals}
+          mealsCount={todayMeals.length}
+          goals={goals}
+          caloriePercent={caloriePercent}
+          proteinPercent={proteinPercent}
+        />
 
-        <div className="bg-gradient-to-br from-brand-50 to-transparent border border-brand-300/50 rounded-3xl p-6 space-y-5">
-          <h2 className="text-lg font-bold text-gray-900">Today</h2>
+        <WeekDashboardCard
+          totals={weeklyTotals}
+          weekRange={weekRange}
+          calorieTarget={weeklyCalorieTarget}
+          proteinTarget={weeklyProteinTarget}
+          caloriePercent={weeklyCaloriePercent}
+          proteinPercent={weeklyProteinPercent}
+        />
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white rounded-xl p-4 border border-orange-100">
-              <p className="text-xs font-semibold text-orange-700 uppercase">Calories</p>
-              <p className="text-3xl font-bold text-gray-900 mt-1">{todayTotals.calories}</p>
-              <p className="text-xs text-gray-500">/ {goals.calories} kcal</p>
-            </div>
-            <div className="bg-white rounded-xl p-4 border border-blue-100">
-              <p className="text-xs font-semibold text-blue-700 uppercase">Protein</p>
-              <p className="text-3xl font-bold text-gray-900 mt-1">{todayTotals.protein}g</p>
-              <p className="text-xs text-gray-500">/ {goals.protein}g</p>
-            </div>
-          </div>
+        <EssentialNutrientsCard nutritionQuality={nutritionQuality} />
 
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Calorie progress</span>
-              <span className="font-semibold">{Math.min(caloriePercent, 100)}%</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div
-                className="bg-gradient-to-r from-brand-400 to-brand-500 h-2 rounded-full transition-all"
-                style={{ width: `${Math.min(caloriePercent, 100)}%` }}
-              />
-            </div>
-          </div>
+        <MealPreviewSection
+          meals={recentWeeklyMeals}
+          timezone={timezone}
+          showEmpty={showWeeklyEmpty}
+          isRefreshing={showRefreshing}
+          onSelectMeal={setSelectedMeal}
+        />
+      </main>
 
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Protein progress</span>
-              <span className="font-semibold">{Math.min(proteinPercent, 100)}%</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div
-                className="bg-blue-500 h-2 rounded-full transition-all"
-                style={{ width: `${Math.min(proteinPercent, 100)}%` }}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-brand-300/50">
-            <div>
-              <p className="text-xs text-gray-600">Carbs today</p>
-              <p className="text-lg font-bold">{todayTotals.carbs}g</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-600">Fat today</p>
-              <p className="text-lg font-bold">{todayTotals.fat}g</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">This Week</h2>
-            <p className="text-xs text-gray-500 mt-0.5">{weekRange?.label || 'Current account week'}</p>
-          </div>
-          <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-bold text-gray-900">Weekly progress</p>
-                <p className="text-xs text-gray-500">{weeklyTotals.count} meal{weeklyTotals.count !== 1 ? 's' : ''} logged</p>
-              </div>
-              <p className="text-sm font-bold text-brand-700">{Math.min(weeklyCaloriePercent, 100)}%</p>
-            </div>
-            <ProgressMeter
-              label="Calories"
-              value={weeklyTotals.calories}
-              target={weeklyCalorieTarget}
-              percent={weeklyCaloriePercent}
-              barClassName="bg-gradient-to-r from-brand-400 to-brand-500"
-              unit="kcal"
-            />
-            <ProgressMeter
-              label="Protein"
-              value={weeklyTotals.protein}
-              target={weeklyProteinTarget}
-              percent={weeklyProteinPercent}
-              barClassName="bg-blue-500"
-              unit="g"
-            />
-          </div>
-
-          <EssentialNutrientsCard nutritionQuality={nutritionQuality} />
-
-          <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-bold text-gray-900">This Week's Meals</p>
-              <Link to="/" className="text-xs font-semibold text-brand-700">
-                View all meals
-              </Link>
-            </div>
-            {showWeeklyEmpty ? (
-              <p className="text-sm text-gray-500 bg-gray-50 rounded-xl p-4">No meals logged this week.</p>
-            ) : recentWeeklyMeals.length > 0 ? (
-              recentWeeklyMeals.map((meal) => (
-                <MealCard
-                  key={meal.id}
-                  meal={meal}
-                  timezone={timezone}
-                  compact
-                  onClick={setSelectedMeal}
-                />
-              ))
-            ) : (
-              <p className="text-sm text-gray-500 bg-gray-50 rounded-xl p-4">Keeping your last progress snapshot while refresh finishes.</p>
-            )}
-          </div>
-        </div>
-      </div>
       <MealDetailSheet
         meal={selectedMeal}
         user={user}
@@ -578,7 +504,6 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
     </div>
   )
 }
-
 function recordProgressStep(name, details) {
   recordStartupStep({
     name,
@@ -591,35 +516,152 @@ function recordProgressStep(name, details) {
 
 function ProgressHeader({ refreshing }) {
   return (
-    <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 z-10">
-      <div className="flex items-start justify-between gap-4">
+    <header className="sticky top-0 z-10 border-b border-[rgba(21,26,34,0.08)] bg-[#FFF9F2]/95 px-5 py-4 backdrop-blur-xl">
+      <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Progress</h1>
-          <p className="text-sm text-gray-500 mt-1">Daily totals and history</p>
+          <h1 className="text-[28px] font-black leading-tight tracking-normal text-[#151A22]">Progress</h1>
+          <p className="mt-0.5 text-sm font-semibold text-[#5F6978]">Your food week</p>
         </div>
         {refreshing && (
-          <span className="text-xs font-semibold text-gray-500 bg-gray-100 rounded-full px-3 py-1">
+          <span className="rounded-full border border-[rgba(21,26,34,0.08)] bg-white/80 px-3 py-1 text-xs font-bold text-[#5F6978] shadow-[0_8px_24px_rgba(21,26,34,0.06)]">
             Refreshing
           </span>
         )}
+      </div>
+    </header>
+  )
+}
+
+function RefreshWarning({ message, onRetry }) {
+  return (
+    <section className="flex items-center justify-between gap-3 rounded-[22px] border border-[#F1D79B] bg-[#FFF4D8] px-4 py-3 shadow-[0_14px_36px_rgba(144,98,36,0.08)]">
+      <div className="min-w-0">
+        <p className="text-sm font-black text-[#151A22]">Couldn't refresh progress</p>
+        <p className="mt-0.5 text-xs font-semibold text-[#7A6849]">{message || 'Your last saved data is still shown.'}</p>
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="shrink-0 rounded-full bg-[#151A22] px-4 py-2 text-xs font-black text-white shadow-[0_10px_22px_rgba(21,26,34,0.16)] transition active:scale-95"
+      >
+        Retry
+      </button>
+    </section>
+  )
+}
+
+function TodayDashboardCard({ totals, mealsCount, goals, caloriePercent, proteinPercent }) {
+  const hasMeals = mealsCount > 0
+
+  return (
+    <section className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.08)]">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-black text-[#151A22]">Today</p>
+          {hasMeals ? (
+            <p className="mt-1 text-xs font-semibold text-[#5F6978]">{mealsCount} meal{mealsCount !== 1 ? 's' : ''} logged</p>
+          ) : (
+            <p className="mt-1 text-xs font-semibold text-[#5F6978]">Scan your first meal to start today.</p>
+          )}
+        </div>
+        <CalorieRing percent={caloriePercent} value={totals.calories} target={goals.calories} />
+      </div>
+
+      {hasMeals ? (
+        <div className="mt-5 grid grid-cols-3 gap-3">
+          <MetricPill label="Calories" value={formatNumber(totals.calories)} detail={`/ ${formatNumber(goals.calories)} kcal`} />
+          <MetricPill label="Protein" value={`${formatNumber(totals.protein)}g`} detail={`/ ${formatNumber(goals.protein)}g`} />
+          <MetricPill label="Meals" value={mealsCount} detail="logged" />
+        </div>
+      ) : (
+        <div className="mt-5 rounded-[22px] bg-[#F7F4EE] px-4 py-4">
+          <p className="text-lg font-black text-[#151A22]">No meals yet</p>
+          <p className="mt-1 text-sm font-semibold text-[#5F6978]">Scan your first meal to start today.</p>
+        </div>
+      )}
+
+      <div className="mt-5 space-y-3">
+        <SoftProgressLine label="Calories" percent={caloriePercent} value={`${formatNumber(totals.calories)} / ${formatNumber(goals.calories)} kcal`} tone="sage" />
+        <SoftProgressLine label="Protein" percent={proteinPercent} value={`${formatNumber(totals.protein)}g / ${formatNumber(goals.protein)}g`} tone="warm" />
+      </div>
+    </section>
+  )
+}
+
+function WeekDashboardCard({ totals, weekRange, calorieTarget, proteinTarget, caloriePercent, proteinPercent }) {
+  return (
+    <section className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-[#151A22] p-5 text-white shadow-[0_18px_50px_rgba(21,26,34,0.12)]">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-black">This Week</p>
+          <p className="mt-1 text-xs font-semibold text-white/60">{weekRange?.label || 'Current account week'}</p>
+        </div>
+        <div className="rounded-full bg-white/10 px-3 py-1 text-xs font-black text-white/80">
+          {totals.count} meal{totals.count !== 1 ? 's' : ''}
+        </div>
+      </div>
+
+      <div className="mt-5 grid grid-cols-3 gap-3">
+        <MetricPill dark label="Calories" value={formatNumber(totals.calories)} detail="kcal" />
+        <MetricPill dark label="Protein" value={`${formatNumber(totals.protein)}g`} detail="this week" />
+        <MetricPill dark label="Meals" value={totals.count} detail="logged" />
+      </div>
+
+      <div className="mt-5 space-y-3">
+        <SoftProgressLine dark label="Calories" percent={caloriePercent} value={`${formatNumber(totals.calories)} / ${formatNumber(calorieTarget)} kcal`} tone="sage" />
+        <SoftProgressLine dark label="Protein" percent={proteinPercent} value={`${formatNumber(totals.protein)}g / ${formatNumber(proteinTarget)}g`} tone="amber" />
+      </div>
+    </section>
+  )
+}
+
+function CalorieRing({ percent, value, target }) {
+  const capped = Math.min(percent, 100)
+
+  return (
+    <div
+      className="grid h-[86px] w-[86px] shrink-0 place-items-center rounded-full shadow-[inset_0_0_0_1px_rgba(21,26,34,0.08)] motion-safe:transition-all motion-safe:duration-700"
+      style={{ background: `conic-gradient(#6F9D74 ${capped}%, #F0ECE4 ${capped}% 100%)` }}
+      aria-label={`Calories ${value} of ${target}`}
+    >
+      <div className="grid h-[68px] w-[68px] place-items-center rounded-full bg-white text-center">
+        <div>
+          <p className="text-lg font-black leading-none text-[#151A22]">{Math.min(capped, 100)}%</p>
+          <p className="mt-1 text-[10px] font-black uppercase text-[#5F6978]">kcal</p>
+        </div>
       </div>
     </div>
   )
 }
 
-function ProgressMeter({ label, value, target, percent, barClassName, unit }) {
+function MetricPill({ label, value, detail, dark = false }) {
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between text-sm">
-        <span className="font-semibold text-gray-600">{label}</span>
-        <span className="font-bold text-gray-900">
-          {value}{unit === 'g' ? 'g' : ''} / {target}{unit === 'g' ? 'g' : ''}
-        </span>
+    <div className={`${dark ? 'bg-white/10 text-white' : 'bg-[#F7F4EE] text-[#151A22]'} min-w-0 rounded-[20px] px-3 py-3`}>
+      <p className={`${dark ? 'text-white/60' : 'text-[#5F6978]'} truncate text-[11px] font-black uppercase`}>{label}</p>
+      <p className="mt-1 truncate text-lg font-black leading-tight">{value}</p>
+      <p className={`${dark ? 'text-white/60' : 'text-[#5F6978]'} mt-0.5 truncate text-[11px] font-bold`}>{detail}</p>
+    </div>
+  )
+}
+
+function SoftProgressLine({ label, value, percent, tone = 'sage', dark = false }) {
+  const capped = Math.min(percent, 100)
+  const toneClass = tone === 'warm'
+    ? 'from-[#D97B5A] to-[#F6D97A]'
+    : tone === 'amber'
+    ? 'from-[#F6D97A] to-[#D97B5A]'
+    : 'from-[#A7C4A0] to-[#6F9D74]'
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-3 text-xs font-black">
+        <span className={dark ? 'text-white/70' : 'text-[#5F6978]'}>{label}</span>
+        <span className={dark ? 'text-white' : 'text-[#151A22]'}>{value}</span>
       </div>
-      <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+      <div className={`${dark ? 'bg-white/10' : 'bg-[#ECE7DD]'} h-2.5 overflow-hidden rounded-full`}>
         <div
-          className={`${barClassName} h-full rounded-full transition-all duration-500`}
-          style={{ width: `${Math.min(percent, 100)}%` }}
+          className={`h-full rounded-full bg-gradient-to-r ${toneClass} motion-safe:transition-all motion-safe:duration-700`}
+          style={{ width: `${capped}%` }}
         />
       </div>
     </div>
@@ -627,123 +669,199 @@ function ProgressMeter({ label, value, target, percent, barClassName, unit }) {
 }
 
 function EssentialNutrientsCard({ nutritionQuality }) {
+  const score = Math.max(0, Math.min(100, Number(nutritionQuality.score || 0)))
+
   useEffect(() => {
-    console.info('[CalCheck] NUTRITION_CARD_RENDERED', {
+    console.info('[CalCheck] NUTRITION_AURA_RENDERED', {
       state: nutritionQuality.state,
-      score: nutritionQuality.score,
+      score,
       likely_low_count: nutritionQuality.likelyLow.length,
       foods_count: nutritionQuality.foodsToAdd.length
     })
-  }, [nutritionQuality])
+  }, [nutritionQuality, score])
 
   if (nutritionQuality.state === 'empty') {
     return (
-      <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-2">
-        <p className="text-sm font-bold text-gray-900">Essential nutrients</p>
-        <p className="text-sm font-semibold text-gray-700">Building your weekly nutrition pattern</p>
-        <p className="text-xs text-gray-500">Log a few more meals to see likely gaps and foods to add.</p>
-        <p className="text-[11px] text-gray-400">Estimated from your logged meals.</p>
-      </div>
+      <section className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.07)]">
+        <NutrientCardHeader />
+        <div className="mt-4 rounded-[24px] bg-[#F7F4EE] px-4 py-5">
+          <p className="text-base font-black text-[#151A22]">Your nutrition pattern will appear here</p>
+          <p className="mt-1 text-sm font-semibold text-[#5F6978]">Log your first meals to unlock weekly insights.</p>
+        </div>
+      </section>
     )
   }
 
   if (nutritionQuality.state === 'building') {
     return (
-      <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-2">
-        <p className="text-sm font-bold text-gray-900">Essential nutrients</p>
-        <p className="text-sm font-semibold text-gray-700">Building your weekly nutrition pattern</p>
-        <p className="text-xs text-gray-500">Add 2-3 more meals for sharper suggestions.</p>
-        <p className="text-[11px] text-gray-400">Estimated from your logged meals.</p>
-      </div>
+      <section className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.07)]">
+        <NutrientCardHeader />
+        <div className="mt-4 flex items-center gap-4 rounded-[24px] bg-[#F7F4EE] px-4 py-5">
+          <NutritionAura score={42} building />
+          <div className="min-w-0 flex-1">
+            <p className="text-base font-black text-[#151A22]">Building your weekly nutrition pattern</p>
+            <p className="mt-1 text-sm font-semibold text-[#5F6978]">Add 2-3 more meals for sharper suggestions.</p>
+            <p className="mt-3 text-[11px] font-bold text-[#8A8175]">Estimated from your logged meals.</p>
+          </div>
+        </div>
+      </section>
     )
   }
 
+  const likelyLow = nutritionQuality.likelyLow.slice(0, 2)
+  const foodsToAdd = nutritionQuality.foodsToAdd.slice(0, 3)
+
   return (
-    <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-bold text-gray-900">Essential nutrients</p>
-          <p className="text-xs text-gray-500">Nutrition quality</p>
+    <section className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.07)]">
+      <NutrientCardHeader />
+      <div className="mt-4 flex items-center gap-4">
+        <NutritionAura score={score} />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-black uppercase text-[#5F6978]">Nutrition quality</p>
+          <p className="mt-1 text-3xl font-black leading-none text-[#151A22]">{score}/100</p>
+          <p className="mt-2 text-xs font-bold text-[#5F6978]">Estimated from your logged meals.</p>
         </div>
-        <p className="text-2xl font-bold text-brand-700">{nutritionQuality.score}/100</p>
       </div>
 
-      {nutritionQuality.likelyLow.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase text-gray-500">Likely low</p>
-          <div className="flex flex-wrap gap-2">
-            {nutritionQuality.likelyLow.slice(0, 2).map((item) => (
-              <span
-                key={item.key}
-                className="rounded-full bg-gray-100 border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-800"
-              >
-                {item.label}
-              </span>
-            ))}
-          </div>
-        </div>
+      {likelyLow.length > 0 && (
+        <ChipGroup title="Likely low" items={likelyLow.map((item) => item.label)} tone="warm" />
       )}
 
-      {nutritionQuality.foodsToAdd.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase text-gray-500">Foods to add</p>
-          <div className="flex flex-wrap gap-2">
-            {nutritionQuality.foodsToAdd.slice(0, 3).map((food) => (
-              <span
-                key={food.name}
-                className="rounded-full bg-brand-50 border border-brand-300/60 px-3 py-1 text-xs font-semibold text-brand-900"
-              >
-                {food.name}
-              </span>
-            ))}
-          </div>
-        </div>
+      {foodsToAdd.length > 0 && (
+        <ChipGroup title="Foods to add" items={foodsToAdd.map((food) => food.name)} tone="sage" />
       )}
 
       {nutritionQuality.sodiumHigh && (
-        <p className="text-xs font-semibold text-gray-500">Sodium looked high this week.</p>
+        <p className="mt-4 rounded-[18px] bg-[#F7F4EE] px-3 py-2 text-xs font-bold text-[#5F6978]">Sodium looked high this week.</p>
       )}
+    </section>
+  )
+}
 
-      <p className="text-[11px] text-gray-400">Estimated from your logged meals.</p>
+function NutrientCardHeader() {
+  return (
+    <div>
+      <p className="text-sm font-black text-[#151A22]">Essential nutrients</p>
+      <p className="mt-1 text-xs font-semibold text-[#5F6978]">Nutrition Aura</p>
     </div>
   )
 }
 
-function SummarySkeleton() {
+function NutritionAura({ score, building = false }) {
+  const capped = Math.max(0, Math.min(100, score))
+
   return (
-    <div className="bg-gray-50 border border-gray-100 rounded-2xl p-6 space-y-4 animate-pulse">
-      <div className="h-5 w-24 rounded bg-gray-200" />
-      <div className="grid grid-cols-2 gap-4">
-        <div className="h-24 rounded-xl bg-white border border-gray-100" />
-        <div className="h-24 rounded-xl bg-white border border-gray-100" />
+    <div
+      className="relative grid h-[104px] w-[104px] shrink-0 place-items-center rounded-full motion-safe:animate-[pulse_2.4s_ease-in-out_infinite]"
+      style={{ background: `conic-gradient(#A7C4A0 ${capped}%, #F6D97A ${Math.min(100, capped + 18)}%, #F0ECE4 0)` }}
+    >
+      <div className="absolute inset-2 rounded-full bg-white/70 blur-[1px]" />
+      <div className="relative grid h-[78px] w-[78px] place-items-center rounded-full bg-white shadow-[inset_0_0_0_1px_rgba(21,26,34,0.08)]">
+        <span className="text-xl font-black text-[#151A22]">{building ? '...' : capped}</span>
       </div>
-      <div className="h-3 rounded-full bg-gray-200" />
-      <div className="h-3 rounded-full bg-gray-200" />
     </div>
   )
 }
 
-function WeeklySkeleton() {
+function ChipGroup({ title, items, tone }) {
+  const chipClass = tone === 'warm'
+    ? 'border-[#F0D6BD] bg-[#FFF1E8] text-[#8B4B32]'
+    : 'border-[#DCE9D8] bg-[#F0F7EE] text-[#365C3B]'
+
   return (
-    <div className="space-y-3 animate-pulse">
-      <div className="h-5 w-32 rounded bg-gray-100" />
-      <div className="h-32 rounded-2xl bg-gray-100" />
-      <div className="h-16 rounded-xl bg-gray-100" />
-      <div className="h-16 rounded-xl bg-gray-100" />
+    <div className="mt-4 space-y-2">
+      <p className="text-[11px] font-black uppercase text-[#5F6978]">{title}</p>
+      <div className="flex flex-wrap gap-2">
+        {items.map((item, index) => (
+          <span
+            key={item}
+            className={`${chipClass} rounded-full border px-3 py-1.5 text-xs font-black motion-safe:animate-[fadeIn_.35s_ease-out_both]`}
+            style={{ animationDelay: `${index * 80}ms` }}
+          >
+            {item}
+          </span>
+        ))}
+      </div>
     </div>
   )
 }
 
-function MacroSkeleton() {
+function MealPreviewSection({ meals, timezone, showEmpty, isRefreshing, onSelectMeal }) {
   return (
-    <div className="space-y-3 animate-pulse">
-      <div className="h-5 w-40 rounded bg-gray-100" />
-      <div className="h-20 rounded-xl bg-gray-100" />
-      <div className="h-20 rounded-xl bg-gray-100" />
+    <section className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-black text-[#151A22]">This Week's Meals</h2>
+          <p className="text-xs font-semibold text-[#5F6978]">Photos and summaries from your saved meals</p>
+        </div>
+        <Link to="/" className="rounded-full bg-white px-3 py-2 text-xs font-black text-[#365C3B] shadow-[0_10px_24px_rgba(21,26,34,0.06)]">
+          View all
+        </Link>
+      </div>
+
+      <div className="space-y-3">
+        {showEmpty ? (
+          <div className="rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white px-4 py-5 shadow-[0_14px_36px_rgba(21,26,34,0.06)]">
+            <p className="text-sm font-black text-[#151A22]">No meals logged this week</p>
+            <p className="mt-1 text-sm font-semibold text-[#5F6978]">Your weekly preview will fill in as you scan meals.</p>
+          </div>
+        ) : meals.length > 0 ? (
+          meals.map((meal) => (
+            <MealCard
+              key={meal.id}
+              meal={meal}
+              timezone={timezone}
+              compact
+              onClick={onSelectMeal}
+            />
+          ))
+        ) : (
+          <div className="rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white px-4 py-5 shadow-[0_14px_36px_rgba(21,26,34,0.06)]">
+            <p className="text-sm font-black text-[#151A22]">Keeping your last progress snapshot</p>
+            <p className="mt-1 text-sm font-semibold text-[#5F6978]">{isRefreshing ? 'Refresh is still finishing quietly.' : 'Try again when your connection feels better.'}</p>
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function ProgressDashboardSkeleton({ slowNotice, onRetry }) {
+  return (
+    <div className="h-full w-full overflow-y-auto bg-[#FFF9F2] pb-24 text-[#151A22]">
+      <ProgressHeader refreshing={false} />
+      <main className="mx-auto max-w-3xl space-y-5 px-5 pb-8 pt-5">
+        {slowNotice && (
+          <RefreshWarning message="This is taking longer than expected. Try again." onRetry={onRetry} />
+        )}
+        <SkeletonCard className="h-[300px]" />
+        <SkeletonCard className="h-[258px]" dark />
+        <SkeletonCard className="h-[260px]" />
+        <div className="space-y-3">
+          <div className="h-6 w-40 animate-pulse rounded-full bg-[#ECE7DD]" />
+          <SkeletonCard className="h-[92px]" />
+          <SkeletonCard className="h-[92px]" />
+          <SkeletonCard className="h-[92px]" />
+        </div>
+      </main>
     </div>
   )
 }
 
+function SkeletonCard({ className = '', dark = false }) {
+  return (
+    <div className={`${className} animate-pulse rounded-[28px] border border-[rgba(21,26,34,0.08)] ${dark ? 'bg-[#151A22]/90' : 'bg-white'} p-5 shadow-[0_18px_50px_rgba(21,26,34,0.06)]`}>
+      <div className={`${dark ? 'bg-white/20' : 'bg-[#ECE7DD]'} h-4 w-24 rounded-full`} />
+      <div className={`${dark ? 'bg-white/10' : 'bg-[#F7F4EE]'} mt-5 h-16 rounded-[22px]`} />
+      <div className={`${dark ? 'bg-white/10' : 'bg-[#F7F4EE]'} mt-4 h-3 rounded-full`} />
+      <div className={`${dark ? 'bg-white/10' : 'bg-[#F7F4EE]'} mt-3 h-3 w-4/5 rounded-full`} />
+    </div>
+  )
+}
+
+function formatNumber(value) {
+  return Math.round(Number(value || 0)).toLocaleString('en-US')
+}
 function hasProgressSnapshot(todayMeals, weeklyBreakdown) {
   return todayMeals.length > 0 || Object.keys(weeklyBreakdown).length > 0
 }
