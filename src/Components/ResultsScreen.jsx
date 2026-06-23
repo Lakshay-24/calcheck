@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Heart } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 
 const PORTION_OPTIONS = [
   { label: 'Small', multiplier: 0.75 },
@@ -221,25 +221,7 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
           </div>
         </div>
 
-        <div className="bg-gradient-to-r from-brand-50 to-white border border-brand-300/60 rounded-2xl p-6">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-brand-700">Meal Score</span>
-            <Heart size={18} className="text-brand-600" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-5xl font-bold text-brand-900">{adjustedResult?.meal_score || 0}</span>
-            <span className="text-lg text-brand-700">/100</span>
-          </div>
-          <p className="text-xs text-brand-700 mt-3">
-            {adjustedResult?.meal_score >= 80
-              ? 'Excellent macro balance'
-              : adjustedResult?.meal_score >= 60
-              ? 'Good choice'
-              : 'Could be better'}
-          </p>
-        </div>
-
-        <div className="space-y-2">
+<div className="space-y-2">
           <p className="text-xs font-semibold text-gray-700 uppercase tracking-widest">
             Macronutrients
           </p>

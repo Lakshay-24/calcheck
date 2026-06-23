@@ -670,6 +670,9 @@ function SoftProgressLine({ label, value, percent, tone = 'sage', dark = false }
 
 function EssentialNutrientsCard({ nutritionQuality }) {
   const score = Math.max(0, Math.min(100, Number(nutritionQuality.score || 0)))
+  const mealCount = nutritionQuality.context?.mealCount || 0
+  const loggedDays = nutritionQuality.context?.loggedDays || 0
+  const contextCopy = `Based on ${mealCount} meal${mealCount !== 1 ? 's' : ''} across ${loggedDays} day${loggedDays !== 1 ? 's' : ''}`
 
   useEffect(() => {
     console.info('[CalCheck] NUTRITION_AURA_RENDERED', {
@@ -678,7 +681,14 @@ function EssentialNutrientsCard({ nutritionQuality }) {
       likely_low_count: nutritionQuality.likelyLow.length,
       foods_count: nutritionQuality.foodsToAdd.length
     })
-  }, [nutritionQuality, score])
+    console.info('[CalCheck] NUTRITION_CARD_CONTEXT_RENDERED', {
+      state: nutritionQuality.state,
+      meal_count: mealCount,
+      logged_days: loggedDays,
+      confidence: nutritionQuality.context?.confidence || null,
+      low_confidence: Boolean(nutritionQuality.context?.lowConfidence)
+    })
+  }, [nutritionQuality, score, mealCount, loggedDays])
 
   if (nutritionQuality.state === 'empty') {
     return (
@@ -700,7 +710,7 @@ function EssentialNutrientsCard({ nutritionQuality }) {
           <NutritionAura score={42} building />
           <div className="min-w-0 flex-1">
             <p className="text-base font-black text-[#151A22]">Building your weekly nutrition pattern</p>
-            <p className="mt-1 text-sm font-semibold text-[#5F6978]">Add 2-3 more meals for sharper suggestions.</p>
+            <p className="mt-1 text-sm font-semibold text-[#5F6978]">{nutritionQuality.context?.lowConfidence ? 'Need a little more meal data for sharper nutrition insights.' : 'Add 2-3 more meals for sharper suggestions.'}</p>
             <p className="mt-3 text-[11px] font-bold text-[#8A8175]">Estimated from your logged meals.</p>
           </div>
         </div>
@@ -719,7 +729,7 @@ function EssentialNutrientsCard({ nutritionQuality }) {
         <div className="min-w-0 flex-1">
           <p className="text-xs font-black uppercase text-[#5F6978]">Nutrition quality</p>
           <p className="mt-1 text-3xl font-black leading-none text-[#151A22]">{score}/100</p>
-          <p className="mt-2 text-xs font-bold text-[#5F6978]">Estimated from your logged meals.</p>
+          <p className="mt-2 text-xs font-bold text-[#5F6978]">{contextCopy}</p>
         </div>
       </div>
 
@@ -731,9 +741,6 @@ function EssentialNutrientsCard({ nutritionQuality }) {
         <ChipGroup title="Foods to add" items={foodsToAdd.map((food) => food.name)} tone="sage" />
       )}
 
-      {nutritionQuality.sodiumHigh && (
-        <p className="mt-4 rounded-[18px] bg-[#F7F4EE] px-3 py-2 text-xs font-bold text-[#5F6978]">Sodium looked high this week.</p>
-      )}
     </section>
   )
 }
