@@ -166,7 +166,17 @@ function MealImage({ src, className, large = false }) {
   if (src) {
     return (
       <div className={`${className} shrink-0 rounded-2xl bg-gray-100 overflow-hidden`}>
-        <img src={src} alt="" className="w-full h-full object-cover" />
+        <img
+          src={src}
+          alt=""
+          className="w-full h-full object-cover"
+          onError={() => {
+            console.warn('[CalCheck] MEAL_IMAGE_RENDER_FAILED', {
+              source_type: getImageSourceType(src),
+              src
+            })
+          }}
+        />
       </div>
     )
   }
@@ -176,6 +186,14 @@ function MealImage({ src, className, large = false }) {
       {large ? <ImageIcon size={42} className="text-gray-300" /> : <ImageIcon size={22} className="text-gray-300" />}
     </div>
   )
+}
+
+function getImageSourceType(src) {
+  if (typeof src !== 'string') return 'unknown'
+  if (src.startsWith('blob:')) return 'blob'
+  if (src.startsWith('data:')) return 'data-url'
+  if (src.includes('/storage/v1/object/public/meal-images/')) return 'meal-images-public-url'
+  return 'url'
 }
 
 function getMealImageSrc(meal) {

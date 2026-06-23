@@ -236,6 +236,14 @@ export const saveMealLog = async (userId, mealData, options = {}) => {
 
   if (savedMeal?.id && options.image?.blob) {
     try {
+      console.info('[CalCheck] MEAL_IMAGE_PAYLOAD_READY', {
+        user_id: userId,
+        meal_id: savedMeal.id,
+        has_blob: true,
+        blob_size: options.image.blob.size || null,
+        blob_type: options.image.blob.type || null,
+        source: options.source || null
+      })
       const imageFields = await uploadMealImage(userId, savedMeal.id, options.image)
 
       if (imageFields) {
@@ -261,9 +269,17 @@ export const saveMealLog = async (userId, mealData, options = {}) => {
       console.warn('[CalCheck] MEAL_IMAGE_UPLOAD_FAILED', {
         user_id: userId,
         meal_id: savedMeal.id,
-        error: imageError?.message || String(imageError)
+        error: imageError?.message || String(imageError),
+        code: imageError?.code || imageError?.status || null
       })
     }
+  } else if (savedMeal?.id) {
+    console.info('[CalCheck] MEAL_IMAGE_PAYLOAD_MISSING', {
+      user_id: userId,
+      meal_id: savedMeal.id,
+      has_options_image: Boolean(options.image),
+      has_blob: Boolean(options.image?.blob)
+    })
   }
 
   return savedMeal
