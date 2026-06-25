@@ -243,6 +243,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
       setWeeklyTotals(nextWeeklyTotals)
       setWeeklyMeals(safeWeekLogs)
       setWeekRange(nextWeekRange)
+      setLoadError(null)
 
       if (profile) {
         setGoals(nextGoals)
@@ -280,12 +281,26 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
         weekly_days: progressSnapshotRef.current.weeklyDays
       })
       if (hasStaleData && reason !== 'manual-retry') {
-        console.info('[CalCheck] PROGRESS_REFRESH_WARNING_SUPPRESSED', {
+        console.info('[CalCheck] PROGRESS_BACKGROUND_REFRESH_ERROR_SUPPRESSED', {
           reason,
           kept_previous_data: true
         })
+        logAppEvent('PROGRESS_BACKGROUND_REFRESH_ERROR_SUPPRESSED', {
+          reason,
+          kept_previous_data: true,
+          weekly_count: progressSnapshotRef.current.weeklyCount,
+          weekly_days: progressSnapshotRef.current.weeklyDays
+        })
         setLoadError(null)
       } else {
+        console.info('[CalCheck] PROGRESS_VISIBLE_REFRESH_ERROR_SHOWN', {
+          reason,
+          kept_previous_data: hasStaleData
+        })
+        logAppEvent('PROGRESS_VISIBLE_REFRESH_ERROR_SHOWN', {
+          reason,
+          kept_previous_data: hasStaleData
+        })
         setLoadError(REFRESH_WARNING_MESSAGE)
       }
       if (reason === 'meal-saved') {
@@ -365,12 +380,26 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
       activeLoadRef.current = null
       setSlowNotice(null)
       if (hasStaleData) {
-        console.info('[CalCheck] PROGRESS_REFRESH_WARNING_SUPPRESSED', {
+        console.info('[CalCheck] PROGRESS_BACKGROUND_REFRESH_ERROR_SUPPRESSED', {
           reason: 'loading-timeout',
           kept_previous_data: true
         })
+        logAppEvent('PROGRESS_BACKGROUND_REFRESH_ERROR_SUPPRESSED', {
+          reason: 'loading-timeout',
+          kept_previous_data: true,
+          weekly_count: progressSnapshotRef.current.weeklyCount,
+          weekly_days: progressSnapshotRef.current.weeklyDays
+        })
         setLoadError(null)
       } else {
+        console.info('[CalCheck] PROGRESS_VISIBLE_REFRESH_ERROR_SHOWN', {
+          reason: 'loading-timeout',
+          kept_previous_data: false
+        })
+        logAppEvent('PROGRESS_VISIBLE_REFRESH_ERROR_SHOWN', {
+          reason: 'loading-timeout',
+          kept_previous_data: false
+        })
         setLoadError(REFRESH_WARNING_MESSAGE)
       }
       setLoading(false)
@@ -414,7 +443,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
 
   useEffect(() => {
     if (!loadError) return
-    console.info('[CalCheck] PROGRESS_REFRESH_WARNING_RENDERED', {
+    console.info('[CalCheck] PROGRESS_VISIBLE_REFRESH_ERROR_SHOWN', {
       kept_previous_data: hasProgressSnapshot(weeklyMeals, weeklyBreakdown),
       message: REFRESH_WARNING_MESSAGE
     })

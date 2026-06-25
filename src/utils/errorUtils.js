@@ -9,6 +9,8 @@ export const normalizeError = (error, fallbackMessage = DEFAULT_ERROR_MESSAGE) =
   const aborted = isAbortError(error)
   const timeout = isTimeoutError(error)
   const network = isNetworkError(error)
+  const edgeFunction = isEdgeFunctionError(error)
+  const userSafeMessage = safeMessage(message, { allowTechnical: false })
 
   if (aborted) {
     return {
@@ -26,15 +28,17 @@ export const normalizeError = (error, fallbackMessage = DEFAULT_ERROR_MESSAGE) =
     ? TIMEOUT_ERROR_MESSAGE
     : network
     ? NETWORK_ERROR_MESSAGE
-    : safeMessage(message) || fallback
+    : userSafeMessage || fallback
 
   return {
-    message: safeMessage(message) || userMessage,
+    message: safeMessage(message, { allowTechnical: true }) || userMessage,
     userMessage,
     code: getErrorCode(error),
     aborted,
     timeout,
     network,
+    edgeFunction,
+    rawSuppressed: edgeFunction && !userSafeMessage,
     original: error
   }
 }
@@ -66,6 +70,8 @@ export const logSafeError = (label, error, extra = {}) => {
     ? 'APP_TIMEOUT_ERROR'
     : normalized.network
     ? 'APP_NETWORK_ERROR'
+    : normalized.edgeFunction
+    ? 'EDGE_FUNCTION_ERROR_NORMALIZED'
     : 'APP_ERROR_NORMALIZED'
 
   const payload = {
@@ -77,6 +83,8 @@ export const logSafeError = (label, error, extra = {}) => {
     aborted: normalized.aborted,
     timeout: normalized.timeout,
     network: normalized.network,
+    edgeFunction: normalized.edgeFunction,
+    rawSuppressed: normalized.rawSuppressed,
     online: typeof navigator === 'undefined' ? true : navigator.onLine,
     ...extra
   }
@@ -113,11 +121,28 @@ const extractMessage = (error) => {
   return ''
 }
 
-const safeMessage = (message) => {
+const safeMessage = (message, options = {}) => {
   const value = String(message || '').trim()
   if (!value || value === 'undefined' || value === 'null' || value === '[object Object]') return ''
   if (/fetch error undefined/i.test(value)) return NETWORK_ERROR_MESSAGE
+  if (!options.allowTechnical && isRawTechnicalErrorMessage(value)) return ''
   return value
+}
+
+const isRawTechnicalErrorMessage = (message) => {
+  const value = String(message || '').toLowerCase()
+  return (
+    value.includes('edge function returned a non-2xx status code') ||
+    value.includes('functionshttperror') ||
+    value.includes('function returned a non-2xx status code') ||
+    value.includes('non-2xx status code')
+  )
+}
+
+const isEdgeFunctionError = (error) => {
+  const message = extractMessage(error)
+  const name = typeof error === 'object' && error ? String(error.name || '') : ''
+  return isRawTechnicalErrorMessage(message) || /FunctionsHttpError|FunctionsFetchError|FunctionsRelayError/i.test(name)
 }
 
 const isAbortError = (error) => {

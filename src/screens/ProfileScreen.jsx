@@ -115,6 +115,10 @@ export default function ProfileScreen({ user }) {
             setProfile(confirmedProfile)
             setSubscriptionNotice('CalCheck Pro is active.')
           } catch (error) {
+            logSafeError('PROFILE_SUBSCRIPTION_ACTION_FAILED', error, {
+              screen: 'profile',
+              operation: 'confirm subscription'
+            })
             setSubscriptionError(getErrorMessage(error, 'Subscription confirmation is still pending.'))
           } finally {
             setSubscriptionLoading(false)
@@ -126,8 +130,11 @@ export default function ProfileScreen({ user }) {
         }
       })
     } catch (error) {
-      logSafeError('APP_ERROR_NORMALIZED', error, { screen: 'profile', operation: 'subscription checkout' })
-      setSubscriptionError(getErrorMessage(error, 'Could not start subscription.'))
+      logSafeError('PROFILE_SUBSCRIPTION_ACTION_FAILED', error, {
+        screen: 'profile',
+        operation: 'create subscription'
+      })
+      setSubscriptionError(getErrorMessage(error, "Couldn't start subscription. Please try again."))
       setSubscriptionNotice(null)
     } finally {
       setSubscriptionLoading(false)
@@ -138,11 +145,17 @@ export default function ProfileScreen({ user }) {
     try {
       setSubscriptionLoading(true)
       setSubscriptionError(null)
+      setSubscriptionNotice(null)
       const result = await syncSubscription()
       if (result?.profile) setProfile(result.profile)
       setSubscriptionNotice('Subscription status refreshed.')
     } catch (error) {
-      setSubscriptionError(getErrorMessage(error, 'Could not refresh subscription.'))
+      logSafeError('PROFILE_SUBSCRIPTION_ACTION_FAILED', error, {
+        screen: 'profile',
+        operation: 'manage subscription',
+        function_name: 'sync-subscription'
+      })
+      setSubscriptionError(getErrorMessage(error, "Couldn't open subscription management. Please try again."))
     } finally {
       setSubscriptionLoading(false)
     }
@@ -152,11 +165,17 @@ export default function ProfileScreen({ user }) {
     try {
       setSubscriptionLoading(true)
       setSubscriptionError(null)
+      setSubscriptionNotice(null)
       const result = await cancelSubscription()
       if (result?.profile) setProfile(result.profile)
       setSubscriptionNotice('Subscription will cancel at the end of the billing period.')
     } catch (error) {
-      setSubscriptionError(getErrorMessage(error, 'Could not cancel subscription.'))
+      logSafeError('PROFILE_SUBSCRIPTION_ACTION_FAILED', error, {
+        screen: 'profile',
+        operation: 'cancel subscription',
+        function_name: 'cancel-subscription'
+      })
+      setSubscriptionError(getErrorMessage(error, "Couldn't cancel subscription right now. Please try again in a moment."))
     } finally {
       setSubscriptionLoading(false)
       setCancelStep(null)
@@ -592,7 +611,7 @@ function SubscriptionCard({ profile, profileLoading, loading, error, notice, onS
       )}
 
       {error && (
-        <div className="mt-4 rounded-xl bg-red-50 border border-red-200 p-3 text-sm font-semibold text-red-800">
+        <div className="mt-4 rounded-xl border border-[#F1D79B] bg-[#FFF4D8] p-3 text-sm font-bold text-[#7A6849]">
           {error}
         </div>
       )}
