@@ -1,12 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Camera, Check, Loader2, Upload, X } from 'lucide-react'
 import CameraModal, { restorePendingMeal } from '../Components/CameraModal'
 import { InstallButton, SmartInstallPrompt } from '../Components/InstallApp'
 import { MealCard, MealDetailSheet } from '../Components/MealCard'
 import {
-  calculateDailyTotals,
   getLifetimeScanCount,
-  getMealLogsToday,
   getUserProfile,
   incrementScanCount,
   isUserPro
@@ -18,10 +16,10 @@ import {
 } from '../services/subscriptions'
 import { signInWithGoogle } from '../services/supabase'
 import { recordPerformanceMetric, trackApiRequest, trackStartupStep } from '../services/diagnostics'
-import { formatLocalWeekday, getLocalDate, getUserTimezone, parseDatabaseTimestamp } from '../utils/timezone'
-import { onMealSaved } from '../utils/mealEvents'
+import { formatLocalWeekday, getUserTimezone } from '../utils/timezone'
 import { getErrorMessage, logSafeError } from '../utils/errorUtils'
 import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
+import { useTodayMeals } from '../data/MealDataProvider'
 
 const FREE_SCAN_LIMIT = 2
 const POST_LOGIN_SCAN_INTENT_KEY = 'calcheck-post-login-scan-intent'
@@ -30,19 +28,13 @@ const ACCESS_CHECK_TIMEOUT_MS = 8000
 export default function ScanScreen({ user, resumeSignal = 0 }) {
   const cameraInputRef = useRef(null)
   const uploadInputRef = useRef(null)
-  const loadRequestRef = useRef(0)
   const scanGateInFlightRef = useRef(false)
-  const mealsCountRef = useRef(0)
-  const [meals, setMeals] = useState([])
-  const [totals, setTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [goals, setGoals] = useState({ calories: 2500, protein: 150 })
   const [profile, setProfile] = useState(null)
   const [lifetimeScans, setLifetimeScans] = useState(0)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [pendingImage, setPendingImage] = useState(null)
-  const [loading, setLoading] = useState(false)
   const [saveNotice, setSaveNotice] = useState(null)
-  const [recoveryKey, setRecoveryKey] = useState(0)
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [paywallOpen, setPaywallOpen] = useState(false)
   const [authLoading, setAuthLoading] = useState(false)
@@ -55,125 +47,75 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const [upgradeError, setUpgradeError] = useState(null)
   const [upgradeStatus, setUpgradeStatus] = useState(null)
   const timezone = getUserTimezone()
+  const todayMealState = useTodayMeals(user?.id, { timezone, resumeSignal })
+  const meals = todayMealState.meals
+  const totals = todayMealState.totals
+  const loading = todayMealState.isInitialLoading
+  const refreshing = todayMealState.isRefreshing
   const pro = isUserPro(profile)
 
-  useEffect(() => {
-    mealsCountRef.current = meals.length
-  }, [meals.length])
 
-  const loadTodaysMeals = useCallback(async (reason = 'screen-load', options = {}) => {
+  useEffect(() => {
     if (!user?.id) {
-      setLoading(false)
       setProfile(null)
       setLifetimeScans(0)
       return
     }
 
-    const requestId = loadRequestRef.current + 1
-    loadRequestRef.current = requestId
+    let cancelled = false
 
-    try {
-      console.info('[CalCheck] data refresh started', { screen: 'scan', reason })
-      if (mealsCountRef.current === 0) {
-        recordPerformanceMetric('SCREEN_SKELETON_SHOWN', {
-          screen: 'history',
-          reason
-        })
-      }
-      setLoading(true)
-      const [mealLogs, profileResult, scanCount] = await trackApiRequest(
-        'history load',
-        () => Promise.all([
-          trackStartupStep('history load', () => getMealLogsToday(user.id, timezone), {
-            blocksRender: false,
-            timeoutMs: 5000,
-            fallbackValue: []
-          }),
-          trackStartupStep('profile fetch', () => getUserProfile(user.id).catch(() => null), {
-            blocksRender: false,
-            timeoutMs: 5000,
-            fallbackValue: null
-          }),
-          trackStartupStep('scan counter fetch', () => getLifetimeScanCount(user.id).catch(() => 0), {
-            blocksRender: false,
-            timeoutMs: 5000,
-            fallbackValue: 0
+    const loadScanMetadata = async () => {
+      try {
+        console.info('[CalCheck] data refresh started', { screen: 'scan', reason: 'metadata-load' })
+        const [profileResult, scanCount] = await trackApiRequest(
+          'scan metadata load',
+          () => Promise.all([
+            getUserProfile(user.id).catch(() => null),
+            getLifetimeScanCount(user.id).catch(() => 0)
+          ]),
+          {
+            dedupeKey: `scan-metadata:${user.id}`,
+            profileFetchBlockedByDedupe: true,
+            onLongRequest: (message) => setSaveNotice(message)
+          }
+        )
+
+        if (cancelled) return
+        setProfile(profileResult)
+        setLifetimeScans(scanCount)
+        if (profileResult) {
+          setGoals({
+            calories: profileResult.calorie_target || 2500,
+            protein: profileResult.protein_target || 150
           })
-        ]),
-        {
-          dedupeKey: options.force ? null : `scan-history:${user.id}:${timezone}`,
-          profileFetchBlockedByDedupe: true,
-          onLongRequest: (message) => setSaveNotice(message)
         }
-      )
-
-      if (loadRequestRef.current !== requestId) return
-
-      const nextTotals = calculateDailyTotals(mealLogs)
-      console.info('[CalCheck] SCAN_TODAY_LOGS_COUNT', {
-        count: Array.isArray(mealLogs) ? mealLogs.length : 0,
-        timezone
-      })
-      console.info('[CalCheck] SCAN_TODAY_TOTALS', nextTotals)
-      storeScanTodayTotals(nextTotals, getLocalDate(new Date(), timezone))
-
-      setMeals(mealLogs)
-      setTotals(nextTotals)
-      setProfile(profileResult)
-      setLifetimeScans(scanCount)
-      if (profileResult) {
-        setGoals({
-          calories: profileResult.calorie_target || 2500,
-          protein: profileResult.protein_target || 150
-        })
-      }
-      console.info('[CalCheck] data refresh completed', { screen: 'scan', reason })
-    } catch (error) {
-      logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'scan', operation: 'load meals' })
-    } finally {
-      if (loadRequestRef.current === requestId) {
-        setLoading(false)
+        console.info('[CalCheck] data refresh completed', { screen: 'scan', reason: 'metadata-load' })
+      } catch (error) {
+        logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'scan', operation: 'load scan metadata' })
       }
     }
-  }, [timezone, user?.id])
 
-  const mergeSavedMealIntoToday = useCallback((savedMeal) => {
-    if (!savedMeal || savedMeal.user_id !== user?.id) return
+    loadScanMetadata()
 
-    const mealLocalDate = savedMeal.local_date || getLocalDate(parseDatabaseTimestamp(savedMeal.timestamp), savedMeal.timezone || timezone)
-    const todayLocalDate = getLocalDate(new Date(), timezone)
-    if (mealLocalDate !== todayLocalDate) return
-
-    setMeals((currentMeals) => {
-      const nextMeals = mergeMeal(currentMeals, savedMeal)
-      const nextTotals = calculateDailyTotals(nextMeals)
-      setTotals(nextTotals)
-      storeScanTodayTotals(nextTotals, todayLocalDate)
-      return nextMeals
-    })
-  }, [timezone, user?.id])
-
-  const restorePendingMealAfterLogin = useCallback(async () => {
-    const saved = await restorePendingMeal(user, loadTodaysMeals)
-    if (saved) {
-      setSaveNotice('Your meal was saved after signing in.')
-      setTimeout(() => setSaveNotice(null), 4000)
+    return () => {
+      cancelled = true
     }
-  }, [loadTodaysMeals, user])
+  }, [user?.id])
 
   useEffect(() => {
-    if (user?.id) {
-      loadTodaysMeals('user-change')
-      restorePendingMealAfterLogin()
-    } else {
-      loadRequestRef.current += 1
-      setLoading(false)
-      setMeals([])
-      setTotals({ calories: 0, protein: 0, carbs: 0, fat: 0 })
-      setProfile(null)
-      setLifetimeScans(0)
-    }
-  }, [loadTodaysMeals, restorePendingMealAfterLogin, user])
+    if (!user?.id) return
+
+    restorePendingMeal(user)
+      .then((saved) => {
+        if (saved) {
+          setSaveNotice('Your meal was saved after signing in.')
+          setTimeout(() => setSaveNotice(null), 4000)
+        }
+      })
+      .catch((error) => {
+        logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'scan', operation: 'restore pending meal' })
+      })
+  }, [user])
 
   useEffect(() => {
     if (!user?.id) return
@@ -185,36 +127,6 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     setAuthModalOpen(false)
     window.setTimeout(() => handleScanRequest(intent), 250)
   }, [user?.id])
-
-  useEffect(() => {
-    if (!resumeSignal || !user?.id) return
-    loadTodaysMeals('app-resume')
-  }, [loadTodaysMeals, resumeSignal, user?.id])
-
-  useEffect(() => {
-    if (!user?.id) return undefined
-
-    return onMealSaved((savedMeal) => {
-      mergeSavedMealIntoToday(savedMeal)
-      loadTodaysMeals('meal-saved', { force: true })
-    })
-  }, [loadTodaysMeals, mergeSavedMealIntoToday, user?.id])
-
-  useEffect(() => {
-    if (!loading) return undefined
-
-    const retryTimer = window.setTimeout(() => {
-      console.warn('[CalCheck] loading timeout triggered', { screen: 'scan', seconds: 5 })
-      loadRequestRef.current += 1
-      setLoading(false)
-      setRecoveryKey((value) => value + 1)
-    }, 5000)
-
-    return () => {
-      window.clearTimeout(retryTimer)
-    }
-  }, [loadTodaysMeals, loading])
-
   const handleMealSaved = (savedMeal) => {
     console.info('[CalCheck] ScanScreen meal saved callback', {
       id: savedMeal?.id,
@@ -222,8 +134,6 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       local_date: savedMeal?.local_date,
       meal_type: savedMeal?.meal_type
     })
-
-    mergeSavedMealIntoToday(savedMeal)
   }
 
   const startScanFlow = (source = 'camera') => {
@@ -512,7 +422,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const proteinPercent = goals.protein ? Math.round((totals.protein / goals.protein) * 100) : 0
 
   return (
-    <div key={recoveryKey} className="h-full w-full overflow-y-auto bg-[#FFF9F2] pb-24 text-[#151A22]">
+    <div className="h-full w-full overflow-y-auto bg-[#FFF9F2] pb-24 text-[#151A22]">
       <CameraModal
         isOpen={cameraOpen}
         onClose={handleCloseModal}
@@ -549,6 +459,12 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       </div>
 
       <div className="mx-auto max-w-3xl space-y-5 px-5 pb-8 pt-5">
+        {refreshing && (
+          <div className="rounded-[22px] border border-[rgba(21,26,34,0.08)] bg-white/80 px-4 py-2 text-xs font-bold text-[#5F6978] shadow-[0_10px_26px_rgba(21,26,34,0.06)]">
+            Refreshing today quietly...
+          </div>
+        )}
+
         {saveNotice && (
           <div className="rounded-[22px] border border-[#F1D79B] bg-[#FFF4D8] px-4 py-3 text-sm font-bold text-[#7A6849] shadow-[0_14px_36px_rgba(144,98,36,0.08)]">
             {saveNotice}
@@ -754,27 +670,6 @@ const withTimeout = (promise, ms, message) => {
   return Promise.race([promise, timeout]).finally(() => {
     window.clearTimeout(timeoutId)
   })
-}
-
-function mergeMeal(mealLogs, savedMeal) {
-  const existing = Array.isArray(mealLogs) ? mealLogs : []
-  const withoutSavedMeal = existing.filter((meal) => meal.id !== savedMeal.id)
-  return [savedMeal, ...withoutSavedMeal].sort((a, b) =>
-    parseDatabaseTimestamp(b.timestamp).getTime() - parseDatabaseTimestamp(a.timestamp).getTime()
-  )
-}
-
-function storeScanTodayTotals(totals, localDate) {
-  if (typeof localStorage === 'undefined') return
-
-  try {
-    localStorage.setItem('calcheck-scan-today-totals', JSON.stringify({
-      localDate,
-      totals
-    }))
-  } catch {
-    // Diagnostics-only snapshot.
-  }
 }
 
 function MealHistorySkeleton() {

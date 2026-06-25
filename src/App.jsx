@@ -10,6 +10,7 @@ import { logSafeError } from './utils/errorUtils'
 import { setDiagnosticsUser } from './utils/appDiagnostics'
 import ErrorBoundary from './Components/ErrorBoundary'
 import { ProgressSkeleton, ScreenSkeleton } from './Components/Skeletons'
+import { MealDataProvider } from './data/MealDataProvider'
 import './index.css'
 
 import ScanScreen from './screens/ScanScreen'
@@ -131,6 +132,7 @@ function App() {
 
   useEffect(() => {
     userRef.current = user
+    setDiagnosticsUser(user)
   }, [user])
 
   useEffect(() => {
@@ -506,6 +508,7 @@ function App() {
 
   return (
     <ErrorBoundary>
+      <MealDataProvider>
       <Router>
       <div className="h-screen w-screen flex flex-col bg-white overflow-hidden">
         <div className="flex-1 overflow-y-auto">
@@ -545,6 +548,7 @@ function App() {
         {user && <BottomNav />}
       </div>
       </Router>
+      </MealDataProvider>
     </ErrorBoundary>
   )
 }

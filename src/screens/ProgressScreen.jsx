@@ -1,416 +1,124 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { logAppEvent } from '../utils/appDiagnostics'
 import {
-  getMealLogsForLocalDateRange,
   getFirstMealLog,
   calculateWeeklyBreakdown,
   getUserProfile
 } from '../services/database'
-import { recordPerformanceMetric, recordStartupStep, trackApiRequest, trackStartupStep } from '../services/diagnostics'
-import { createLifecycleAbortController, getLifecycleGeneration, recordAppLifecycleEvent } from '../services/lifecycle'
-import { getLocalDate, getUserTimezone, getUserWeekRange, parseDatabaseTimestamp } from '../utils/timezone'
-import { onMealSaved } from '../utils/mealEvents'
+import { trackApiRequest } from '../services/diagnostics'
+import { getUserTimezone, getUserWeekRange } from '../utils/timezone'
 import { getErrorMessage, logSafeError } from '../utils/errorUtils'
 import { getNutritionQuality } from '../utils/nutritionQuality'
 import { MealCard, MealDetailSheet } from '../Components/MealCard'
+import { useWeekMeals } from '../data/MealDataProvider'
 
-const PROGRESS_LOAD_TIMEOUT_MS = 5000
 const DEFAULT_GOALS = { calories: 2500, protein: 150 }
 const REFRESH_WARNING_MESSAGE = 'Check your connection and try again.'
 
 export default function ProgressScreen({ user, resumeSignal = 0 }) {
-  const loadRequestRef = useRef(0)
-  const activeLoadRef = useRef(null)
-  const progressSnapshotRef = useRef({ weeklyCount: 0, weeklyDays: 0 })
-  const [weeklyBreakdown, setWeeklyBreakdown] = useState({})
-  const [weeklyTotals, setWeeklyTotals] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 })
-  const [weeklyMeals, setWeeklyMeals] = useState([])
   const [weekRange, setWeekRange] = useState(null)
   const [goals, setGoals] = useState(DEFAULT_GOALS)
-  const [loading, setLoading] = useState(true)
-  const [recoveryKey, setRecoveryKey] = useState(0)
-  const [slowNotice, setSlowNotice] = useState(null)
-  const [loadError, setLoadError] = useState(null)
+  const [anchorLoading, setAnchorLoading] = useState(true)
+  const [anchorError, setAnchorError] = useState(null)
+  const [retryWarning, setRetryWarning] = useState(null)
   const [selectedMeal, setSelectedMeal] = useState(null)
   const weeklyMealsSectionRef = useRef(null)
+  const weekRangeRef = useRef(null)
   const timezone = getUserTimezone()
 
   useEffect(() => {
-    progressSnapshotRef.current = {
-      weeklyCount: weeklyMeals.length,
-      weeklyDays: Object.keys(weeklyBreakdown).length
-    }
-  }, [weeklyMeals.length, weeklyBreakdown])
+    weekRangeRef.current = weekRange
+  }, [weekRange])
 
-  const loadProgress = useCallback(async (reason = 'screen-load', options = {}) => {
+  const resolveWeekAnchor = useCallback(async (reason = 'screen-load') => {
     if (!user?.id) {
-      setLoading(false)
+      setAnchorLoading(false)
       return
     }
 
-    const requestId = loadRequestRef.current + 1
-    loadRequestRef.current = requestId
-    activeLoadRef.current?.abort('new progress load started')
-    const lifecycleRequest = createLifecycleAbortController(`progress:${reason}`)
-    activeLoadRef.current = lifecycleRequest
-    const lifecycleGeneration = getLifecycleGeneration()
-    const loadStartedAt = performance.now()
-    const loadStartTime = new Date().toISOString()
-
     try {
-      console.info('[CalCheck] data refresh started', { screen: 'progress', reason })
-      if (reason === 'meal-saved') {
-        console.info('[CalCheck] PROGRESS_REFRESH_AFTER_SAVE_START', {
-          force: Boolean(options.force)
-        })
-      }
-      if (!hasProgressSnapshotRef(progressSnapshotRef.current)) {
-        recordPerformanceMetric('SCREEN_SKELETON_SHOWN', {
-          screen: 'progress',
-          reason
-        })
-      }
-      setLoading(true)
-      setSlowNotice(null)
-      setLoadError(null)
-      recordProgressStep('progress screen open', {
-        reason,
-        startTime: loadStartTime,
-        durationMs: 0,
-        success: true,
-        blocksRender: false
-      })
-
-      const [profile, firstMeal] = await withProgressTimeout(
-        trackApiRequest(
-          'progress base data load',
-          () => Promise.all([
-            trackStartupStep('progress profile query', () => getUserProfile(user.id, { signal: lifecycleRequest.signal }).catch(() => null), {
-              blocksRender: true,
-              timeoutMs: PROGRESS_LOAD_TIMEOUT_MS,
-              fallbackValue: null
-            }),
-            trackStartupStep('progress first meal query', () => getFirstMealLog(user.id, timezone, { signal: lifecycleRequest.signal }).catch(() => null), {
-              blocksRender: true,
-              timeoutMs: PROGRESS_LOAD_TIMEOUT_MS,
-              fallbackValue: null
-            })
-          ]),
-          {
-            dedupeKey: options.force ? null : `progress-history:${user.id}:${timezone}:${lifecycleGeneration}`,
-            profileFetchBlockedByDedupe: true,
-            onLongRequest: (message) => setSlowNotice(message)
-          }
-        ),
-        null,
-        'progress base data load',
-        lifecycleRequest
+      setAnchorLoading(true)
+      setAnchorError(null)
+      console.info('[CalCheck] data refresh started', { screen: 'progress', reason, target: 'week-anchor' })
+      const [profile, firstMeal] = await trackApiRequest(
+        'progress week anchor load',
+        () => Promise.all([
+          getUserProfile(user.id).catch(() => null),
+          getFirstMealLog(user.id, timezone).catch(() => null)
+        ]),
+        {
+          dedupeKey: `progress-week-anchor:${user.id}:${timezone}`,
+          profileFetchBlockedByDedupe: true
+        }
       )
-
 
       const accountCreatedAt = profile?.created_at || user?.created_at || null
       const firstMealAnchor = firstMeal?.fallback_anchor_date || firstMeal?.timestamp || null
-      const weekAnchor = accountCreatedAt || firstMealAnchor || new Date().toISOString()
-      const nextWeekRange = getUserWeekRange(weekAnchor, new Date(), timezone)
+      const weekAnchor = accountCreatedAt || firstMealAnchor
 
-      console.info('[CalCheck] USER_CREATED_AT_FOR_WEEK', {
-        user_created_at: user?.created_at || null,
-        profile_created_at: profile?.created_at || null,
-        fallback_first_meal_at: firstMealAnchor,
-        anchor_used: weekAnchor
-      })
-      console.info('[CalCheck] USER_WEEK_START', {
-        local_date: nextWeekRange.startLocalDate,
-        timezone
-      })
-      console.info('[CalCheck] USER_WEEK_END', {
-        local_date: nextWeekRange.endLocalDate,
-        timezone
-      })
-
-      const weekLogs = await withProgressTimeout(
-        trackStartupStep(
-          'progress user-week history query',
-          () => getMealLogsForLocalDateRange(
-            user.id,
-            nextWeekRange.startLocalDate,
-            nextWeekRange.endLocalDate,
-            timezone,
-            { signal: lifecycleRequest.signal }
-          ),
-          {
-            blocksRender: true,
-            timeoutMs: PROGRESS_LOAD_TIMEOUT_MS,
-            fallbackValue: null
-          }
-        ),
-        null,
-        'progress user-week history query',
-        lifecycleRequest
-      )
-
-      if (!Array.isArray(weekLogs)) {
-        console.warn('[CalCheck] PROGRESS_FALLBACK_USED', {
-          reason: 'week-logs-unavailable',
-          kept_previous_data: true
-        })
-        throw new Error('Could not refresh weekly progress. Please retry.')
-      }
-
-      if (
-        loadRequestRef.current !== requestId ||
-        lifecycleRequest.signal.aborted ||
-        getLifecycleGeneration() !== lifecycleGeneration
-      ) {
-        recordAppLifecycleEvent('stale progress result ignored', {
+      if (!weekAnchor) {
+        console.info('[CalCheck] USER_WEEK_ANCHOR_PENDING', {
+          user_id: user.id,
           reason,
-          requestId,
-          aborted: lifecycleRequest.signal.aborted,
-          lifecycleGeneration,
-          currentLifecycleGeneration: getLifecycleGeneration()
+          has_profile: Boolean(profile),
+          has_first_meal: Boolean(firstMeal)
         })
+        setAnchorLoading(false)
         return
       }
 
-      const calculationStart = performance.now()
-      const calculationStartTime = new Date().toISOString()
-      const safeWeekLogs = Array.isArray(weekLogs) ? weekLogs : []
-      const nextWeeklyBreakdown = calculateWeeklyBreakdown(safeWeekLogs, timezone)
-      const nextWeeklyTotals = calculateWeeklyTotals(safeWeekLogs)
-      const nextGoals = profile
-        ? {
-            calories: normalizeGoal(profile.calorie_target, DEFAULT_GOALS.calories),
-            protein: normalizeGoal(profile.protein_target, DEFAULT_GOALS.protein)
-          }
-        : DEFAULT_GOALS
-      const weeklyCaloriePercent = getPercent(nextWeeklyTotals.calories, nextGoals.calories * 7)
-      const weeklyProteinPercent = getPercent(nextWeeklyTotals.protein, nextGoals.protein * 7)
-      console.info('[CalCheck] PROGRESS_WEEK_LOGS_COUNT', {
-        count: safeWeekLogs.length,
-        week_start: nextWeekRange.startLocalDate,
-        week_end: nextWeekRange.endLocalDate
-      })
-      console.info('[CalCheck] WEEKLY_PROGRESS_CALCULATION', {
-        timezone,
+      const nextWeekRange = getUserWeekRange(weekAnchor, new Date(), timezone)
+      console.info('[CalCheck] USER_WEEK_ANCHOR_RESOLVED', {
+        user_created_at: user?.created_at || null,
+        profile_created_at: profile?.created_at || null,
+        fallback_first_meal_at: firstMealAnchor,
+        anchor_used: weekAnchor,
         week_start: nextWeekRange.startLocalDate,
         week_end: nextWeekRange.endLocalDate,
-        week_logs_count: safeWeekLogs.length,
-        weekly_totals: nextWeeklyTotals,
-        target_values: {
-          daily_calories: nextGoals.calories,
-          daily_protein: nextGoals.protein,
-          weekly_calories: nextGoals.calories * 7,
-          weekly_protein: nextGoals.protein * 7
-        },
-        computed_progress_percentage: {
-          calories: weeklyCaloriePercent,
-          protein: weeklyProteinPercent
-        },
-        breakdown_days: Object.keys(nextWeeklyBreakdown)
+        timezone
       })
-      recordPerformanceMetric('WEEKLY_PROGRESS_CALCULATION', {
-        screen: 'progress',
-        timezone,
-        week_start: nextWeekRange.startLocalDate,
-        week_end: nextWeekRange.endLocalDate,
-        week_logs_count: safeWeekLogs.length,
-        weekly_calories: nextWeeklyTotals.calories,
-        weekly_protein: nextWeeklyTotals.protein,
-        weekly_calorie_target: nextGoals.calories * 7,
-        weekly_protein_target: nextGoals.protein * 7,
-        calorie_percent: weeklyCaloriePercent,
-        protein_percent: weeklyProteinPercent
-      })
-      console.info('[CalCheck] WEEKLY_CALORIES_TOTAL', { calories: nextWeeklyTotals.calories })
-      console.info('[CalCheck] WEEKLY_PROTEIN_TOTAL', { protein: nextWeeklyTotals.protein })
-      console.info('[CalCheck] WEEKLY_MEALS_COUNT', { count: nextWeeklyTotals.count })
-      console.info('[CalCheck] WEEKLY_TARGETS_USED', {
-        daily_calories: nextGoals.calories,
-        daily_protein: nextGoals.protein,
-        weekly_calories: nextGoals.calories * 7,
-        weekly_protein: nextGoals.protein * 7
-      })
-      recordProgressStep('progress calculations', {
-        startTime: calculationStartTime,
-        endTime: new Date().toISOString(),
-        durationMs: Math.round(performance.now() - calculationStart),
-        success: true,
-        blocksRender: true,
-        weekCount: safeWeekLogs.length
-      })
-
-      setWeeklyBreakdown(nextWeeklyBreakdown)
-      setWeeklyTotals(nextWeeklyTotals)
-      setWeeklyMeals(safeWeekLogs)
       setWeekRange(nextWeekRange)
-      setLoadError(null)
-
       if (profile) {
-        setGoals(nextGoals)
-      }
-      recordProgressStep('progress render ready', {
-        startTime: loadStartTime,
-        endTime: new Date().toISOString(),
-        durationMs: Math.round(performance.now() - loadStartedAt),
-        success: true,
-        blocksRender: true
-      })
-      console.info('[CalCheck] data refresh completed', { screen: 'progress', reason })
-      if (reason === 'meal-saved') {
-        console.info('[CalCheck] PROGRESS_REFRESH_AFTER_SAVE_SUCCESS', {
-          week_count: safeWeekLogs.length
+        setGoals({
+          calories: normalizeGoal(profile.calorie_target, DEFAULT_GOALS.calories),
+          protein: normalizeGoal(profile.protein_target, DEFAULT_GOALS.protein)
         })
       }
+      setRetryWarning(null)
+      console.info('[CalCheck] data refresh completed', { screen: 'progress', reason, target: 'week-anchor' })
     } catch (error) {
       const normalizedMessage = getErrorMessage(error, REFRESH_WARNING_MESSAGE)
-      const hasStaleData = hasProgressSnapshotRef(progressSnapshotRef.current)
-      recordProgressStep('progress data load failed', {
-        startTime: loadStartTime,
-        endTime: new Date().toISOString(),
-        durationMs: Math.round(performance.now() - loadStartedAt),
-        success: false,
-        blocksRender: false,
-        error: normalizedMessage,
-        kept_previous_data: hasStaleData
-      })
-      logSafeError('PROGRESS_ERROR_NORMALIZED', error, { screen: 'progress', operation: 'load progress' })
-      console.info('[CalCheck] PROGRESS_STALE_DATA_PRESERVED', {
+      logSafeError('PROGRESS_ERROR_NORMALIZED', error, { screen: 'progress', operation: 'resolve week anchor' })
+      setAnchorError(normalizedMessage)
+      console.info('[CalCheck] USER_WEEK_ANCHOR_PENDING', {
+        user_id: user?.id || null,
         reason,
-        kept_previous_data: hasStaleData,
-        weekly_count: progressSnapshotRef.current.weeklyCount,
-        weekly_days: progressSnapshotRef.current.weeklyDays
+        error: normalizedMessage,
+        kept_previous_week: Boolean(weekRangeRef.current)
       })
-      if (hasStaleData && reason !== 'manual-retry') {
-        console.info('[CalCheck] PROGRESS_BACKGROUND_REFRESH_ERROR_SUPPRESSED', {
-          reason,
-          kept_previous_data: true
-        })
-        logAppEvent('PROGRESS_BACKGROUND_REFRESH_ERROR_SUPPRESSED', {
-          reason,
-          kept_previous_data: true,
-          weekly_count: progressSnapshotRef.current.weeklyCount,
-          weekly_days: progressSnapshotRef.current.weeklyDays
-        })
-        setLoadError(null)
-      } else {
-        console.info('[CalCheck] PROGRESS_VISIBLE_REFRESH_ERROR_SHOWN', {
-          reason,
-          kept_previous_data: hasStaleData
-        })
-        logAppEvent('PROGRESS_VISIBLE_REFRESH_ERROR_SHOWN', {
-          reason,
-          kept_previous_data: hasStaleData
-        })
-        setLoadError(REFRESH_WARNING_MESSAGE)
-      }
-      if (reason === 'meal-saved') {
-        console.warn('[CalCheck] PROGRESS_REFRESH_AFTER_SAVE_FAILED', {
-          error: normalizedMessage,
-          kept_previous_data: hasStaleData
-        })
-      }
     } finally {
-      if (loadRequestRef.current === requestId) {
-        setLoading(false)
-      }
-      if (activeLoadRef.current?.id === lifecycleRequest.id) {
-        activeLoadRef.current = null
-      }
-      lifecycleRequest.release()
+      setAnchorLoading(false)
     }
   }, [timezone, user?.created_at, user?.id])
 
   useEffect(() => {
-    if (user?.id) {
-      loadProgress('user-change')
-    } else {
-      loadRequestRef.current += 1
-      setLoading(false)
+    if (!user?.id) {
+      setWeekRange(null)
+      setAnchorLoading(false)
+      return
     }
-  }, [loadProgress, user?.id])
-
-  useEffect(() => {
-    return () => {
-      activeLoadRef.current?.abort('progress unmounted')
-      activeLoadRef.current = null
-      loadRequestRef.current += 1
-    }
-  }, [])
+    resolveWeekAnchor('user-change')
+  }, [resolveWeekAnchor, user?.id])
 
   useEffect(() => {
     if (!resumeSignal || !user?.id) return
-    loadProgress('app-resume')
-  }, [loadProgress, resumeSignal, user?.id])
+    resolveWeekAnchor('app-resume')
+  }, [resolveWeekAnchor, resumeSignal, user?.id])
 
-  useEffect(() => {
-    if (!user?.id) return undefined
-
-    return onMealSaved((savedMeal) => {
-      if (!savedMeal || savedMeal.user_id !== user.id) return
-
-      const mealLocalDate = getMealLocalDate(savedMeal, timezone)
-
-      if (weekRange && mealLocalDate >= weekRange.startLocalDate && mealLocalDate <= weekRange.endLocalDate) {
-        setWeeklyMeals((currentMeals) => {
-          const nextMeals = mergeMeal(currentMeals, savedMeal)
-          setWeeklyBreakdown(calculateWeeklyBreakdown(nextMeals, timezone))
-          setWeeklyTotals(calculateWeeklyTotals(nextMeals))
-          return nextMeals
-        })
-      }
-
-      loadProgress('meal-saved', { force: true })
-    })
-  }, [loadProgress, timezone, user?.id, weekRange])
-
-  useEffect(() => {
-    if (!loading) return undefined
-
-    const retryTimer = window.setTimeout(() => {
-      const hasStaleData = hasProgressSnapshotRef(progressSnapshotRef.current)
-      console.warn('[CalCheck] loading timeout triggered', { screen: 'progress', seconds: 5 })
-      console.info('[CalCheck] PROGRESS_STALE_DATA_PRESERVED', {
-        reason: 'loading-timeout',
-        kept_previous_data: hasStaleData,
-        weekly_count: progressSnapshotRef.current.weeklyCount,
-        weekly_days: progressSnapshotRef.current.weeklyDays
-      })
-      loadRequestRef.current += 1
-      activeLoadRef.current?.abort('progress loading timeout')
-      activeLoadRef.current = null
-      setSlowNotice(null)
-      if (hasStaleData) {
-        console.info('[CalCheck] PROGRESS_BACKGROUND_REFRESH_ERROR_SUPPRESSED', {
-          reason: 'loading-timeout',
-          kept_previous_data: true
-        })
-        logAppEvent('PROGRESS_BACKGROUND_REFRESH_ERROR_SUPPRESSED', {
-          reason: 'loading-timeout',
-          kept_previous_data: true,
-          weekly_count: progressSnapshotRef.current.weeklyCount,
-          weekly_days: progressSnapshotRef.current.weeklyDays
-        })
-        setLoadError(null)
-      } else {
-        console.info('[CalCheck] PROGRESS_VISIBLE_REFRESH_ERROR_SHOWN', {
-          reason: 'loading-timeout',
-          kept_previous_data: false
-        })
-        logAppEvent('PROGRESS_VISIBLE_REFRESH_ERROR_SHOWN', {
-          reason: 'loading-timeout',
-          kept_previous_data: false
-        })
-        setLoadError(REFRESH_WARNING_MESSAGE)
-      }
-      setLoading(false)
-      setRecoveryKey((value) => value + 1)
-    }, 5000)
-
-    return () => {
-      window.clearTimeout(retryTimer)
-    }
-  }, [loadProgress, loading])
-
+  const weekMealState = useWeekMeals(user?.id, weekRange, { timezone, resumeSignal })
+  const weeklyMeals = weekMealState.meals
+  const weeklyBreakdown = useMemo(() => calculateWeeklyBreakdown(weeklyMeals, timezone), [weeklyMeals, timezone])
+  const weeklyTotals = useMemo(() => calculateWeeklyTotals(weeklyMeals), [weeklyMeals])
   const recentWeeklyMeals = weeklyMeals.slice(0, 5)
   const nutritionQuality = useMemo(
     () => getNutritionQuality(weeklyMeals, timezone),
@@ -421,47 +129,62 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
   const weeklyProteinTarget = goals.protein * 7
   const weeklyCaloriePercent = getPercent(weeklyTotals.calories, weeklyCalorieTarget)
   const weeklyProteinPercent = getPercent(weeklyTotals.protein, weeklyProteinTarget)
-  const showSkeleton = loading && !hasProgressSnapshot(weeklyMeals, weeklyBreakdown)
-  const showRefreshing = loading && !showSkeleton
-  const showWeeklyEmpty = !loading && !loadError && weeklyTotals.count === 0
+  const hasProgressData = hasProgressSnapshot(weeklyMeals, weeklyBreakdown)
+  const showSkeleton = !hasProgressData && (anchorLoading || (!weekRange && !anchorError) || weekMealState.isInitialLoading)
+  const showRefreshing = weekMealState.isRefreshing || weekMealState.isRetrying
+  const visibleError = retryWarning || (!hasProgressData && (weekMealState.error || anchorError) ? REFRESH_WARNING_MESSAGE : null)
+  const showWeeklyEmpty = !showSkeleton && !visibleError && weeklyTotals.count === 0
+
+  const handleRetry = async () => {
+    setRetryWarning(null)
+    if (!weekRange) {
+      await resolveWeekAnchor('manual-retry')
+    }
+    const result = await weekMealState.refresh({ reason: 'manual-retry', retry: true, force: true })
+    if (result?.status === 'error' || result?.status === 'stale') {
+      setRetryWarning(REFRESH_WARNING_MESSAGE)
+    }
+  }
 
   useEffect(() => {
     if (!showWeeklyEmpty) return
     console.info('[CalCheck] PROGRESS_EMPTY_STATE_RENDERED', {
       scope: 'current-user-week',
       week_start: weekRange?.startLocalDate || null,
-      week_end: weekRange?.endLocalDate || null
+      week_end: weekRange?.endLocalDate || null,
+      query_key: weekMealState.key
     })
-  }, [showWeeklyEmpty, weekRange?.endLocalDate, weekRange?.startLocalDate])
+  }, [showWeeklyEmpty, weekMealState.key, weekRange?.endLocalDate, weekRange?.startLocalDate])
 
   useEffect(() => {
     console.info('[CalCheck] PROGRESS_UI_REDESIGN_RENDERED', {
       weekly_meals: weeklyTotals.count,
-      refreshing: showRefreshing
+      refreshing: showRefreshing,
+      stale: weekMealState.isStale
     })
-  }, [showRefreshing, weeklyTotals.count])
+  }, [showRefreshing, weekMealState.isStale, weeklyTotals.count])
 
   useEffect(() => {
-    if (!loadError) return
+    if (!visibleError) return
     console.info('[CalCheck] PROGRESS_VISIBLE_REFRESH_ERROR_SHOWN', {
-      kept_previous_data: hasProgressSnapshot(weeklyMeals, weeklyBreakdown),
+      kept_previous_data: hasProgressData,
       message: REFRESH_WARNING_MESSAGE
     })
-  }, [loadError, weeklyMeals, weeklyBreakdown])
+  }, [hasProgressData, visibleError])
 
   if (showSkeleton) {
-    return <ProgressDashboardSkeleton slowNotice={slowNotice} onRetry={() => loadProgress('manual-retry')} />
+    return <ProgressDashboardSkeleton slowNotice={null} onRetry={handleRetry} />
   }
 
   return (
-    <div key={recoveryKey} className="h-full w-full overflow-y-auto bg-[#FFF9F2] pb-24 text-[#151A22]">
+    <div className="h-full w-full overflow-y-auto bg-[#FFF9F2] pb-24 text-[#151A22]">
       <ProgressHeader refreshing={showRefreshing} />
 
       <main className="mx-auto max-w-3xl space-y-5 px-5 pb-8 pt-5">
-        {loadError && (
+        {visibleError && (
           <RefreshWarning
-            message={loadError || 'This is taking longer than expected. Try again.'}
-            onRetry={() => loadProgress('manual-retry')}
+            message={visibleError || 'This is taking longer than expected. Try again.'}
+            onRetry={handleRetry}
           />
         )}
         <WeekDashboardCard
@@ -494,15 +217,7 @@ export default function ProgressScreen({ user, resumeSignal = 0 }) {
     </div>
   )
 }
-function recordProgressStep(name, details) {
-  recordStartupStep({
-    name,
-    timestamp: new Date().toISOString(),
-    timedOut: false,
-    timeoutMs: PROGRESS_LOAD_TIMEOUT_MS,
-    ...details
-  })
-}
+
 
 function ProgressHeader({ refreshing }) {
   return (
@@ -820,10 +535,6 @@ function hasProgressSnapshot(weeklyMeals, weeklyBreakdown) {
   return weeklyMeals.length > 0 || Object.keys(weeklyBreakdown).length > 0
 }
 
-function hasProgressSnapshotRef(snapshot) {
-  return (snapshot?.weeklyCount || 0) > 0 || (snapshot?.weeklyDays || 0) > 0
-}
-
 function calculateWeeklyTotals(mealLogs) {
   return mealLogs.reduce((totals, meal) => ({
     calories: totals.calories + (meal.calories || 0),
@@ -834,18 +545,6 @@ function calculateWeeklyTotals(mealLogs) {
   }), { calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 })
 }
 
-function mergeMeal(mealLogs, savedMeal) {
-  const existing = Array.isArray(mealLogs) ? mealLogs : []
-  const withoutSavedMeal = existing.filter((meal) => meal.id !== savedMeal.id)
-  return [savedMeal, ...withoutSavedMeal].sort((a, b) =>
-    parseDatabaseTimestamp(b.timestamp).getTime() - parseDatabaseTimestamp(a.timestamp).getTime()
-  )
-}
-
-function getMealLocalDate(meal, timezone) {
-  return meal?.local_date || getLocalDate(parseDatabaseTimestamp(meal?.timestamp), meal?.timezone || timezone)
-}
-
 function normalizeGoal(value, fallback) {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
@@ -854,40 +553,4 @@ function normalizeGoal(value, fallback) {
 function getPercent(value, target) {
   if (!target || target <= 0) return 0
   return Math.max(0, Math.round((value / target) * 100))
-}
-
-function withProgressTimeout(promise, fallbackValue, stepName, lifecycleRequest) {
-  let timeoutId
-  let timedOut = false
-  const startTime = new Date().toISOString()
-  const startMs = performance.now()
-
-  const guardedPromise = Promise.resolve(promise).catch((error) => {
-    if (timedOut) {
-      console.warn('[CalCheck] progress request rejected after timeout', { stepName, error })
-      return fallbackValue
-    }
-
-    throw error
-  })
-
-  const timeoutPromise = new Promise((resolve) => {
-    timeoutId = window.setTimeout(() => {
-      timedOut = true
-      lifecycleRequest?.abort(`${stepName} timeout`)
-      recordProgressStep(stepName, {
-        startTime,
-        endTime: new Date().toISOString(),
-        durationMs: Math.round(performance.now() - startMs),
-        success: false,
-        timedOut: true,
-        blocksRender: true
-      })
-      resolve(fallbackValue)
-    }, PROGRESS_LOAD_TIMEOUT_MS)
-  })
-
-  return Promise.race([guardedPromise, timeoutPromise]).finally(() => {
-    window.clearTimeout(timeoutId)
-  })
 }
