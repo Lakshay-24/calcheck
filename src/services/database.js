@@ -313,6 +313,13 @@ export const saveMealLog = async (userId, mealData, options = {}) => {
         operation: 'meal image upload',
         metadata: { meal_id: savedMeal.id }
       })
+      logAppError('MEAL_IMAGE_UPLOAD_NON_BLOCKING_FAILURE', imageError, {
+        user_id: userId,
+        level: 'warn',
+        screen: 'scan',
+        operation: 'meal image upload',
+        metadata: { meal_id: savedMeal.id, meal_save_preserved: true }
+      })
     }
   } else if (savedMeal?.id) {
     console.info('[CalCheck] MEAL_IMAGE_PAYLOAD_MISSING', {

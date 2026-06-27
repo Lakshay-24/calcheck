@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef } from 'react'
 import { calculateDailyTotals, getMealLogsForLocalDateRange, getMealLogsToday } from '../services/database'
 import { logAppEvent } from '../utils/appDiagnostics'
+import { getErrorMessage, isAbortError } from '../utils/errorUtils'
 import { getLocalDate, getUserTimezone, parseDatabaseTimestamp } from '../utils/timezone'
 import { onMealSaved } from '../utils/mealEvents'
 
@@ -260,12 +261,12 @@ export function MealDataProvider({ children }) {
           console.warn('[CalCheck] MEAL_SAVE_FORCED_REFETCH_FAILED_STALE_PRESERVED', {
             key,
             meal_id: savedMeal.id,
-            error: error?.message || String(error)
+            error: getErrorMessage(error, 'Could not refresh meals.')
           })
           logAppEvent('MEAL_SAVE_FORCED_REFETCH_FAILED_STALE_PRESERVED', {
             level: 'warn',
             operation: 'meal save forced refetch',
-            metadata: { key, meal_id: savedMeal.id, error: error?.message || String(error) }
+            metadata: { key, meal_id: savedMeal.id, error: getErrorMessage(error, 'Could not refresh meals.') }
           })
         })
     })
@@ -287,6 +288,11 @@ export function MealDataProvider({ children }) {
 
   const invalidateMeals = useCallback((reason = 'manual') => {
     console.info('[CalCheck] MEAL_CACHE_INVALIDATED', { reason })
+    logAppEvent('MEAL_CACHE_INVALIDATED', {
+      level: 'info',
+      operation: 'meal cache invalidation',
+      metadata: { reason }
+    })
     dispatch({ type: 'MARK_ALL_STALE', reason })
   }, [])
 
@@ -555,13 +561,13 @@ function getMealLocalDate(meal) {
 
 function getFriendlyError(error) {
   if (!error) return 'Could not refresh meals.'
-  if (error.name === 'AbortError') return ''
-  return error.message || 'Could not refresh meals.'
+  if (isAbortError(error)) return ''
+  return getErrorMessage(error, 'Could not refresh meals.')
 }
 
 function logStateChanged(key, previous, next, reason) {
   if (!key || previous.status === next.status && previous.isStale === next.isStale && previous.data === next.data) return
-  console.info('[CalCheck] MEAL_QUERY_STATE_CHANGED', {
+  const metadata = {
     key,
     reason,
     previous_status: previous.status,
@@ -569,6 +575,12 @@ function logStateChanged(key, previous, next, reason) {
     is_stale: next.isStale,
     count: next.data?.length || 0,
     requestVersion: next.requestVersion
+  }
+  console.info('[CalCheck] MEAL_QUERY_STATE_CHANGED', metadata)
+  logAppEvent('MEAL_QUERY_STATE_CHANGED', {
+    level: 'info',
+    operation: 'meal query state',
+    metadata
   })
 }
 

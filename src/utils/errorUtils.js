@@ -145,13 +145,13 @@ const isEdgeFunctionError = (error) => {
   return isRawTechnicalErrorMessage(message) || /FunctionsHttpError|FunctionsFetchError|FunctionsRelayError/i.test(name)
 }
 
-const isAbortError = (error) => {
+export const isAbortError = (error) => {
   const name = typeof error === 'object' && error ? error.name : ''
   const message = extractMessage(error).toLowerCase()
   return name === 'AbortError' || message.includes('aborted') || message.includes('aborterror')
 }
 
-const isTimeoutError = (error) => {
+export const isTimeoutError = (error) => {
   const message = extractMessage(error).toLowerCase()
   return message.includes('timeout') || message.includes('timed out') || message.includes('took too long')
 }

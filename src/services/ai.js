@@ -180,12 +180,12 @@ export const analyzeFood = async (imageData) => {
   }))
 
   if (error) {
-    logSafeError('EDGE_FUNCTION_FAILED', error, { operation: 'analyze-food' })
-    logAppError('EDGE_FUNCTION_FAILED', error, {
+    logSafeError('ANALYZE_FOOD_FAILED', error, { screen: 'scan', operation: 'analyze-food' })
+    logAppError('ANALYZE_FOOD_FAILED', error, {
       screen: 'scan',
       operation: 'analyze-food'
     })
-    throw new Error(getErrorMessage(error, 'Failed to analyze food image. Please try again.'))
+    throw new Error(getErrorMessage(error, "Couldn't analyze this meal. Please try again."))
   }
 
   if (data?.error) {

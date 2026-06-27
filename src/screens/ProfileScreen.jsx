@@ -155,7 +155,7 @@ export default function ProfileScreen({ user }) {
         operation: 'manage subscription',
         function_name: 'sync-subscription'
       })
-      setSubscriptionError(getErrorMessage(error, "Couldn't open subscription management. Please try again."))
+      setSubscriptionError(getErrorMessage(error, "Couldn't refresh subscription status. Your current plan is still shown."))
     } finally {
       setSubscriptionLoading(false)
     }

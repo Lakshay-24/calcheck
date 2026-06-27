@@ -16,6 +16,7 @@ import {
 } from '../services/subscriptions'
 import { signInWithGoogle } from '../services/supabase'
 import { recordPerformanceMetric, trackApiRequest, trackStartupStep } from '../services/diagnostics'
+import { logAppEvent } from '../utils/appDiagnostics'
 import { formatLocalWeekday, getUserTimezone } from '../utils/timezone'
 import { getErrorMessage, logSafeError } from '../utils/errorUtils'
 import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
@@ -137,6 +138,12 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   }
 
   const startScanFlow = (source = 'camera') => {
+    logAppEvent('CAMERA_OPEN_REQUESTED', {
+      level: 'info',
+      screen: 'scan',
+      operation: 'open scan input',
+      metadata: { source }
+    })
     setPendingImage(null)
 
     if (source === 'upload') {
@@ -161,6 +168,12 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       recordPerformanceMetric('CAMERA_OK_NOOP_PREVENTED', {
         source,
         reason: 'access-check-already-running'
+      })
+      logAppEvent('SCAN_FIRST_TAP_BLOCKED_BY_ACCESS_CHECK', {
+        level: 'warn',
+        screen: 'scan',
+        operation: 'check scan access',
+        metadata: { source, reason: 'access-check-already-running' }
       })
       return
     }
@@ -275,6 +288,11 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       recordPerformanceMetric('CAMERA_OK_NOOP_PREVENTED', {
         reason: 'file-input-empty'
       })
+      logAppEvent('CAMERA_FILE_SELECTION_EMPTY', {
+        level: 'warn',
+        screen: 'scan',
+        operation: 'select image file'
+      })
       return
     }
 
@@ -288,6 +306,12 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       source: 'native-file-input',
       file_size: file.size,
       file_type: file.type
+    })
+    logAppEvent('CAMERA_FILE_SELECTED', {
+      level: 'info',
+      screen: 'scan',
+      operation: 'select image file',
+      metadata: { source: 'native-file-input', file_size: file.size, file_type: file.type }
     })
     setPendingImage(file)
     setCameraOpen(true)

@@ -3,6 +3,7 @@ import { Loader2, X } from 'lucide-react'
 import { analyzeFood } from '../services/ai'
 import { saveMealLog, getOrCreateUserProfile } from '../services/database'
 import { recordPerformanceMetric, trackApiRequest } from '../services/diagnostics'
+import { logAppEvent } from '../utils/appDiagnostics'
 import { signInWithGoogle } from '../services/supabase'
 import { prepareImageForAnalysis, revokeImagePreview } from '../utils/imagePerformance'
 import { getErrorMessage, logSafeError } from '../utils/errorUtils'
@@ -88,6 +89,12 @@ export default function CameraModal({
   }, [isOpen, pendingImage])
 
   const startDesktopCamera = async () => {
+    logAppEvent('CAMERA_OPEN_REQUESTED', {
+      level: 'info',
+      screen: 'scan',
+      operation: 'open camera',
+      metadata: { source: 'desktop-camera' }
+    })
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError('Camera is not available in this browser. Use Upload Image instead.')
       return
@@ -123,6 +130,11 @@ export default function CameraModal({
 
   const clearPreviewUrl = () => {
     if (!previewUrlRef.current) return
+    logAppEvent('IMAGE_BASE64_RELEASED', {
+      level: 'info',
+      screen: 'scan',
+      operation: 'clear prepared image'
+    })
     revokeImagePreview(previewUrlRef.current)
     previewUrlRef.current = null
   }
@@ -213,18 +225,27 @@ export default function CameraModal({
     } catch (err) {
       if (analysisRequestRef.current !== requestId) return
 
-      const message = getErrorMessage(err, 'Failed to analyze food image. Please try again.')
+      const message = getErrorMessage(err, "Couldn't analyze this meal. Please try again.")
       const failedDuringCompression = currentPhase === 'photo-compression'
       const timeoutStage = message.includes('took too long') ? 'photo-compression' : 'analysis'
-      logSafeError(failedDuringCompression ? 'PHOTO_COMPRESSION_FAILED' : 'EDGE_FUNCTION_FAILED', err, {
-        source: sourceLabel
+      logSafeError(failedDuringCompression ? 'IMAGE_COMPRESSION_FAILED' : 'ANALYZE_FOOD_FAILED', err, {
+        source: sourceLabel,
+        screen: 'scan',
+        operation: failedDuringCompression ? 'compress image' : 'analyze food'
+      })
+      logAppEvent(failedDuringCompression ? 'IMAGE_COMPRESSION_FAILED' : 'ANALYZE_FOOD_FAILED', {
+        level: 'error',
+        screen: 'scan',
+        operation: failedDuringCompression ? 'compress image' : 'analyze food',
+        normalized_message: message,
+        metadata: { source: sourceLabel }
       })
       console.error('[CalCheck] ANALYSIS_FLOW_ABORTED', {
         source: sourceLabel,
         stage: failedDuringCompression ? 'photo-compression' : 'analysis',
         error: err
       })
-      recordPerformanceMetric(failedDuringCompression ? 'PHOTO_COMPRESSION_FAILED' : 'ANALYSIS_FAILED', {
+      recordPerformanceMetric(failedDuringCompression ? 'IMAGE_COMPRESSION_FAILED' : 'ANALYSIS_FAILED', {
         source: sourceLabel,
         error: message
       })
@@ -334,9 +355,9 @@ export default function CameraModal({
       await persistMeal(selectedMealResult)
       setRequestNotice(null)
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to save meal. Please try again.'))
+      setError(getErrorMessage(err, "Couldn't save meal. Please try again."))
       setRequestNotice(null)
-      logSafeError('SUPABASE_OPERATION_FAILED', err, { operation: 'save meal' })
+      logSafeError('SAVE_MEAL_FAILED', err, { screen: 'scan', operation: 'save meal' })
     } finally {
       setIsSaving(false)
     }

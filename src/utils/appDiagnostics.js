@@ -7,6 +7,7 @@ const MAX_METADATA_CHARS = 3000
 const DUPLICATE_WINDOW_MS = 30000
 const recentEvents = new Map()
 let diagnosticsUserId = null
+let lastBoundUserId = undefined
 let flushing = false
 
 export const getSessionId = () => {
@@ -24,7 +25,19 @@ export const getSessionId = () => {
 }
 
 export const setDiagnosticsUser = (user) => {
-  diagnosticsUserId = user?.id || null
+  const nextUserId = user?.id || null
+  diagnosticsUserId = nextUserId
+
+  if (lastBoundUserId !== nextUserId) {
+    lastBoundUserId = nextUserId
+    logAppEvent('DIAGNOSTICS_USER_BOUND', {
+      level: 'info',
+      operation: 'auth diagnostics bind',
+      user_id: nextUserId,
+      metadata: { has_user: Boolean(nextUserId) }
+    })
+  }
+
   flushDiagnosticsQueue()
 }
 
@@ -88,7 +101,7 @@ const sendEvent = async (event) => {
   if (error) throw error
 }
 
-const flushDiagnosticsQueue = async () => {
+export const flushDiagnosticsQueue = async () => {
   if (flushing || typeof localStorage === 'undefined' || navigator.onLine === false) return
   flushing = true
 
@@ -167,7 +180,7 @@ const sanitizeMetadata = (value) => {
   return { truncated: true, preview: serialized.slice(0, MAX_METADATA_CHARS) }
 }
 
-const isSensitiveKey = (key) => /token|secret|apikey|api_key|authorization|password|base64|blob|image|photo|prompt/i.test(key)
+const isSensitiveKey = (key) => /token|secret|apikey|api_key|authorization|password|base64|blob|image|photo|prompt|file|key|payment|card|email/i.test(key)
 const sanitizeString = (value) => value.length > 500 ? `${value.slice(0, 500)}...` : value
 const safeText = (value) => {
   const text = String(value || '').trim()
@@ -183,5 +196,11 @@ const getPlatform = () => typeof navigator === 'undefined' ? null : `${navigator
 const isPwa = () => typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator?.standalone === true)
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('online', () => flushDiagnosticsQueue())
+  window.addEventListener('online', () => {
+    logAppEvent('APP_NETWORK_ONLINE', { level: 'info', operation: 'network status' })
+    flushDiagnosticsQueue()
+  })
+  window.addEventListener('offline', () => {
+    logAppEvent('APP_NETWORK_OFFLINE', { level: 'warn', operation: 'network status' })
+  })
 }
