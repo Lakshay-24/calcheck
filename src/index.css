@@ -92,3 +92,48 @@ input:focus, textarea:focus {
 .animate-spin {
   animation: spin 1s linear infinite;
 }
+
+@keyframes nutritionAuraDrift {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+@keyframes nutritionAuraBreathe {
+  0%, 100% { opacity: 0.68; box-shadow: 0 0 0 10px rgba(167, 196, 160, 0.08), 0 18px 42px rgba(21, 26, 34, 0.08); }
+  50% { opacity: 0.96; box-shadow: 0 0 0 16px rgba(246, 217, 122, 0.12), 0 22px 52px rgba(21, 26, 34, 0.1); }
+}
+
+@keyframes nutritionLabelFade {
+  0%, 100% { opacity: 0.38; transform: translateY(2px) scale(0.98); }
+  38%, 62% { opacity: 0.92; transform: translateY(0) scale(1); }
+}
+
+.nutrition-aura-orbit {
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.9) 54%, transparent 55%),
+    conic-gradient(from 130deg, rgba(167, 196, 160, 0.92), rgba(246, 217, 122, 0.86), rgba(217, 123, 90, 0.46), rgba(167, 196, 160, 0.92));
+  filter: drop-shadow(0 16px 30px rgba(21, 26, 34, 0.08));
+  animation: nutritionAuraDrift 16s linear infinite;
+}
+
+.nutrition-aura-ring {
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.72));
+  animation: nutritionAuraBreathe 4.8s ease-in-out infinite;
+}
+
+.nutrition-aura-label {
+  animation: nutritionLabelFade 5.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nutrition-aura-orbit,
+  .nutrition-aura-ring,
+  .nutrition-aura-label {
+    animation: none !important;
+  }
+
+  .nutrition-aura-label {
+    opacity: 0.76;
+    transform: none !important;
+  }
+}

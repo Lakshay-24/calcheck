@@ -342,9 +342,15 @@ function EssentialNutrientsCard({ nutritionQuality }) {
     return (
       <section className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.07)]">
         <NutrientCardHeader />
-        <div className="mt-4 rounded-[24px] bg-[#F7F4EE] px-4 py-5">
-          <p className="text-base font-black text-[#151A22]">Your nutrition pattern will appear here</p>
-          <p className="mt-1 text-sm font-semibold text-[#5F6978]">Log your first meals to unlock weekly insights.</p>
+        <div className="mt-4 overflow-hidden rounded-[24px] bg-[#F7F4EE] px-4 py-5">
+          <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
+            <BuildingNutritionAura />
+            <div className="min-w-0 flex-1 text-center sm:text-left">
+              <p className="text-base font-black text-[#151A22]">Building your weekly nutrition pattern</p>
+              <p className="mt-1 text-sm font-semibold leading-relaxed text-[#5F6978]">Log a few more meals to unlock nutrient quality, likely gaps, and foods to add.</p>
+              <p className="mt-3 text-[11px] font-bold text-[#8A8175]">Estimated from your logged meals.</p>
+            </div>
+          </div>
         </div>
       </section>
     )
@@ -354,12 +360,14 @@ function EssentialNutrientsCard({ nutritionQuality }) {
     return (
       <section className="rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white p-5 shadow-[0_18px_50px_rgba(21,26,34,0.07)]">
         <NutrientCardHeader />
-        <div className="mt-4 flex items-center gap-4 rounded-[24px] bg-[#F7F4EE] px-4 py-5">
-          <NutritionAura score={42} building />
-          <div className="min-w-0 flex-1">
-            <p className="text-base font-black text-[#151A22]">Building your weekly nutrition pattern</p>
-            <p className="mt-1 text-sm font-semibold text-[#5F6978]">{nutritionQuality.context?.lowConfidence ? 'Need a little more meal data for sharper nutrition insights.' : 'Add 2-3 more meals for sharper suggestions.'}</p>
-            <p className="mt-3 text-[11px] font-bold text-[#8A8175]">Estimated from your logged meals.</p>
+        <div className="mt-4 overflow-hidden rounded-[24px] bg-[#F7F4EE] px-4 py-5">
+          <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
+            <BuildingNutritionAura />
+            <div className="min-w-0 flex-1 text-center sm:text-left">
+              <p className="text-base font-black text-[#151A22]">Building your weekly nutrition pattern</p>
+              <p className="mt-1 text-sm font-semibold leading-relaxed text-[#5F6978]">Log a few more meals to unlock nutrient quality, likely gaps, and foods to add.</p>
+              <p className="mt-3 text-[11px] font-bold text-[#8A8175]">Estimated from your logged meals.</p>
+            </div>
           </div>
         </div>
       </section>
@@ -402,6 +410,33 @@ function NutrientCardHeader() {
   )
 }
 
+function BuildingNutritionAura() {
+  const nutrients = [
+    { label: 'Fibre', className: 'left-1 top-7' },
+    { label: 'Omega-3', className: 'right-0 top-10' },
+    { label: 'Calcium', className: 'bottom-7 right-2' },
+    { label: 'Iron', className: 'bottom-5 left-3' },
+    { label: 'Vitamin B12', className: 'left-1/2 top-0 -translate-x-1/2' }
+  ]
+
+  return (
+    <div className="nutrition-aura-build relative h-[168px] w-full max-w-[260px] shrink-0 sm:w-[210px]" aria-hidden="true">
+      <div className="nutrition-aura-orbit absolute left-1/2 top-1/2 h-[118px] w-[118px] -translate-x-1/2 -translate-y-1/2 rounded-full" />
+      <div className="nutrition-aura-ring absolute left-1/2 top-1/2 grid h-[96px] w-[96px] -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full">
+        <div className="h-[68px] w-[68px] rounded-full bg-white shadow-[inset_0_0_0_1px_rgba(21,26,34,0.08)]" />
+      </div>
+      {nutrients.map((nutrient, index) => (
+        <span
+          key={nutrient.label}
+          className={`nutrition-aura-label absolute ${nutrient.className} rounded-full border border-white/70 bg-white/75 px-2.5 py-1 text-[11px] font-black text-[#5F6978] shadow-[0_8px_22px_rgba(21,26,34,0.08)] backdrop-blur`}
+          style={{ animationDelay: `${index * 850}ms` }}
+        >
+          {nutrient.label}
+        </span>
+      ))}
+    </div>
+  )
+}
 function NutritionAura({ score, building = false }) {
   const capped = Math.max(0, Math.min(100, score))
 

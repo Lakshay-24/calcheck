@@ -5,7 +5,7 @@ import { saveMealLog, getOrCreateUserProfile } from '../services/database'
 import { recordPerformanceMetric, trackApiRequest } from '../services/diagnostics'
 import { logAppEvent } from '../utils/appDiagnostics'
 import { signInWithGoogle } from '../services/supabase'
-import { prepareImageForAnalysis, revokeImagePreview } from '../utils/imagePerformance'
+import { blobToDataUrl, prepareImageForAnalysis, revokeImagePreview } from '../utils/imagePerformance'
 import { getErrorMessage, logSafeError } from '../utils/errorUtils'
 import { emitMealSaved } from '../utils/mealEvents'
 import AnalysisScreen from './AnalysisScreen'
@@ -130,7 +130,7 @@ export default function CameraModal({
 
   const clearPreviewUrl = () => {
     if (!previewUrlRef.current) return
-    logAppEvent('IMAGE_BASE64_RELEASED', {
+    logAppEvent('IMAGE_OBJECT_URL_REVOKED', {
       level: 'info',
       screen: 'scan',
       operation: 'clear prepared image'
@@ -158,9 +158,9 @@ export default function CameraModal({
       setFlowStatus('Preparing photo...')
       setStage('preparing')
       console.info('[CalCheck] CAMERA_OK_TAPPED', { source: sourceLabel })
-      console.info('[CalCheck] PHOTO_COMPRESSION_START', { source: sourceLabel })
+      console.info('[CalCheck] IMAGE_COMPRESSION_START', { source: sourceLabel })
       recordPerformanceMetric('CAMERA_OK_TAPPED', { source: sourceLabel })
-      recordPerformanceMetric('PHOTO_COMPRESSION_START', { source: sourceLabel })
+      recordPerformanceMetric('IMAGE_COMPRESSION_START', { source: sourceLabel })
 
       const preparedImage = await withTimeout(
         prepareImageForAnalysis(imageSource, sourceLabel),
@@ -179,8 +179,9 @@ export default function CameraModal({
       }
 
       uploadImageRef.current = preparedImage
+      retryImageSourceRef.current = preparedImage.blob
       setPreviewUrl(preparedImage.previewUrl)
-      console.info('[CalCheck] PHOTO_COMPRESSION_SUCCESS', {
+      console.info('[CalCheck] IMAGE_COMPRESSION_SUCCESS', {
         source: sourceLabel,
         diagnostics: preparedImage.diagnostics
       })
@@ -188,7 +189,7 @@ export default function CameraModal({
         source: sourceLabel,
         upload_size_bytes: preparedImage.diagnostics?.upload_size_bytes
       })
-      recordPerformanceMetric('PHOTO_COMPRESSION_SUCCESS', {
+      recordPerformanceMetric('IMAGE_COMPRESSION_SUCCESS', {
         source: sourceLabel,
         upload_size_bytes: preparedImage.diagnostics?.upload_size_bytes,
         durationMs: preparedImage.diagnostics?.compression_duration_ms
@@ -205,13 +206,32 @@ export default function CameraModal({
       recordPerformanceMetric('ANALYSIS_FLOW_STARTED', { source: sourceLabel })
       recordPerformanceMetric('ANALYSIS_START', { source: sourceLabel })
       currentPhase = 'analysis'
-      const result = await withTimeout(
-        trackApiRequest('analyze-food flow', () => analyzeFood(preparedImage.dataUrl), {
-          onLongRequest: (message) => setRequestNotice(message)
-        }),
-        ANALYSIS_TIMEOUT_MS,
-        'Analysis is taking too long. Please try again.'
-      )
+      let analysisDataUrl = null
+      let result
+      try {
+        analysisDataUrl = await blobToDataUrl(preparedImage.blob)
+        logAppEvent('IMAGE_BASE64_CREATED_FOR_ANALYSIS', {
+          level: 'info',
+          screen: 'scan',
+          operation: 'analyze food',
+          metadata: { source: sourceLabel, upload_size_bytes: preparedImage.blob?.size || null }
+        })
+        result = await withTimeout(
+          trackApiRequest('analyze-food flow', () => analyzeFood(analysisDataUrl), {
+            onLongRequest: (message) => setRequestNotice(message)
+          }),
+          ANALYSIS_TIMEOUT_MS,
+          'Analysis is taking too long. Please try again.'
+        )
+      } finally {
+        analysisDataUrl = null
+        logAppEvent('IMAGE_BASE64_RELEASED', {
+          level: 'info',
+          screen: 'scan',
+          operation: 'analyze food',
+          metadata: { source: sourceLabel }
+        })
+      }
 
       if (analysisRequestRef.current !== requestId) return
 
@@ -225,8 +245,11 @@ export default function CameraModal({
     } catch (err) {
       if (analysisRequestRef.current !== requestId) return
 
-      const message = getErrorMessage(err, "Couldn't analyze this meal. Please try again.")
       const failedDuringCompression = currentPhase === 'photo-compression'
+      const lowMemoryFallback = failedDuringCompression && isLikelyLowMemoryImageError(err)
+      const message = lowMemoryFallback
+        ? 'This photo was too large to process. Try a smaller photo or retake it.'
+        : getErrorMessage(err, "Couldn't analyze this meal. Please try again.")
       const timeoutStage = message.includes('took too long') ? 'photo-compression' : 'analysis'
       logSafeError(failedDuringCompression ? 'IMAGE_COMPRESSION_FAILED' : 'ANALYZE_FOOD_FAILED', err, {
         source: sourceLabel,
@@ -238,8 +261,17 @@ export default function CameraModal({
         screen: 'scan',
         operation: failedDuringCompression ? 'compress image' : 'analyze food',
         normalized_message: message,
-        metadata: { source: sourceLabel }
+        metadata: getImageFailureMetadata(imageSource, sourceLabel)
       })
+      if (lowMemoryFallback) {
+        logAppEvent('IMAGE_LOW_MEMORY_FALLBACK', {
+          level: 'warn',
+          screen: 'scan',
+          operation: 'compress image',
+          normalized_message: message,
+          metadata: getImageFailureMetadata(imageSource, sourceLabel)
+        })
+      }
       console.error('[CalCheck] ANALYSIS_FLOW_ABORTED', {
         source: sourceLabel,
         stage: failedDuringCompression ? 'photo-compression' : 'analysis',
@@ -493,6 +525,31 @@ const withTimeout = (promise, ms, message) => {
   })
 }
 
+const isLikelyLowMemoryImageError = (error) => {
+  const message = String(error?.message || error || '').toLowerCase()
+  return (
+    message.includes('memory') ||
+    message.includes('allocation') ||
+    message.includes('too large') ||
+    message.includes('decode') ||
+    message.includes('load image') ||
+    message.includes('compress image') ||
+    message.includes('canvas')
+  )
+}
+
+const getImageFailureMetadata = (source, sourceLabel) => {
+  const isFile = typeof File !== 'undefined' && source instanceof File
+  const isBlob = typeof Blob !== 'undefined' && source instanceof Blob
+  return {
+    source: sourceLabel,
+    original_file_size_bytes: isFile || isBlob ? source.size : null,
+    original_file_type: isFile || isBlob ? source.type || null : null,
+    device_memory_gb: typeof navigator === 'undefined' ? null : navigator.deviceMemory || null,
+    viewport_width: typeof window === 'undefined' ? null : window.innerWidth,
+    viewport_height: typeof window === 'undefined' ? null : window.innerHeight
+  }
+}
 function PreparingView({ status }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-brand-50 to-white min-h-[60vh] text-center">

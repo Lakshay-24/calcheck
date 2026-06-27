@@ -25,11 +25,14 @@ import { useTodayMeals } from '../data/MealDataProvider'
 const FREE_SCAN_LIMIT = 2
 const POST_LOGIN_SCAN_INTENT_KEY = 'calcheck-post-login-scan-intent'
 const ACCESS_CHECK_TIMEOUT_MS = 8000
+const PICKER_OPEN_RELEASE_MS = 1600
 
 export default function ScanScreen({ user, resumeSignal = 0 }) {
   const cameraInputRef = useRef(null)
   const uploadInputRef = useRef(null)
   const scanGateInFlightRef = useRef(false)
+  const pickerOpeningRef = useRef(false)
+  const pickerReleaseTimerRef = useRef(null)
   const [goals, setGoals] = useState({ calories: 2500, protein: 150 })
   const [profile, setProfile] = useState(null)
   const [lifetimeScans, setLifetimeScans] = useState(0)
@@ -41,6 +44,8 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const [authLoading, setAuthLoading] = useState(false)
   const [upgradeLoading, setUpgradeLoading] = useState(false)
   const [scanGateLoading, setScanGateLoading] = useState(false)
+  const [scanAccessReady, setScanAccessReady] = useState(false)
+  const [pickerOpeningSource, setPickerOpeningSource] = useState(null)
   const [selectedMeal, setSelectedMeal] = useState(null)
   const [showSmartInstallPrompt, setShowSmartInstallPrompt] = useState(false)
   const [pendingPaywallScanSource, setPendingPaywallScanSource] = useState(null)
@@ -60,6 +65,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     if (!user?.id) {
       setProfile(null)
       setLifetimeScans(0)
+      setScanAccessReady(false)
       return
     }
 
@@ -84,6 +90,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         if (cancelled) return
         setProfile(profileResult)
         setLifetimeScans(scanCount)
+        setScanAccessReady(true)
         if (profileResult) {
           setGoals({
             calories: profileResult.calorie_target || 2500,
@@ -118,6 +125,23 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       })
   }, [user])
 
+
+  useEffect(() => {
+    return () => {
+      if (pickerReleaseTimerRef.current) {
+        window.clearTimeout(pickerReleaseTimerRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      // cleanup picker release timer
+      if (pickerReleaseTimerRef.current) {
+        window.clearTimeout(pickerReleaseTimerRef.current)
+      }
+    }
+  }, [])
   useEffect(() => {
     if (!user?.id) return
 
@@ -137,8 +161,45 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     })
   }
 
+  const resetPickerInput = (source) => {
+    const input = source === 'upload' ? uploadInputRef.current : cameraInputRef.current
+    if (!input) return null
+    input.value = ''
+    logAppEvent('CAMERA_INPUT_RESET_BEFORE_CLICK', {
+      level: 'info',
+      screen: 'scan',
+      operation: 'open scan input',
+      metadata: { source }
+    })
+    return input
+  }
+
+  const releasePickerOpening = () => {
+    if (pickerReleaseTimerRef.current) {
+      window.clearTimeout(pickerReleaseTimerRef.current)
+      pickerReleaseTimerRef.current = null
+    }
+    pickerOpeningRef.current = false
+    setPickerOpeningSource(null)
+  }
+
+  const markPickerOpening = (source) => {
+    pickerOpeningRef.current = true
+    setPickerOpeningSource(source)
+    if (pickerReleaseTimerRef.current) window.clearTimeout(pickerReleaseTimerRef.current)
+    pickerReleaseTimerRef.current = window.setTimeout(releasePickerOpening, PICKER_OPEN_RELEASE_MS)
+  }
+
   const startScanFlow = (source = 'camera') => {
-    logAppEvent('CAMERA_OPEN_REQUESTED', {
+    if (pickerOpeningRef.current) {
+      recordPerformanceMetric('CAMERA_OK_NOOP_PREVENTED', {
+        source,
+        reason: 'picker-already-opening'
+      })
+      return
+    }
+
+    logAppEvent('CAMERA_PICKER_OPEN_REQUESTED', {
       level: 'info',
       screen: 'scan',
       operation: 'open scan input',
@@ -147,46 +208,41 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     setPendingImage(null)
 
     if (source === 'upload') {
-      uploadInputRef.current?.click()
+      const input = resetPickerInput(source)
+      if (!input) return
+      markPickerOpening(source)
+      input.click()
+      logAppEvent('CAMERA_PICKER_OPENED_FROM_USER_GESTURE', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'open scan input',
+        metadata: { source }
+      })
       return
     }
 
     if (shouldUseNativeCapture()) {
-      cameraInputRef.current?.click()
+      const input = resetPickerInput(source)
+      if (!input) return
+      markPickerOpening(source)
+      input.click()
+      logAppEvent('CAMERA_PICKER_OPENED_FROM_USER_GESTURE', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'open scan input',
+        metadata: { source }
+      })
       return
     }
 
     setCameraOpen(true)
   }
 
-  const handleScanRequest = async (source = 'camera') => {
-    if (scanGateInFlightRef.current) {
-      console.warn('[CalCheck] CAMERA_OK_NOOP_PREVENTED', {
-        source,
-        reason: 'access-check-already-running'
-      })
-      recordPerformanceMetric('CAMERA_OK_NOOP_PREVENTED', {
-        source,
-        reason: 'access-check-already-running'
-      })
-      logAppEvent('SCAN_FIRST_TAP_BLOCKED_BY_ACCESS_CHECK', {
-        level: 'warn',
-        screen: 'scan',
-        operation: 'check scan access',
-        metadata: { source, reason: 'access-check-already-running' }
-      })
-      return
-    }
-
-    if (!user?.id) {
-      sessionStorage.setItem(POST_LOGIN_SCAN_INTENT_KEY, source)
-      setAuthModalOpen(true)
-      return
-    }
-
+  const refreshScanAccess = async (source = 'camera') => {
     try {
       scanGateInFlightRef.current = true
       setScanGateLoading(true)
+      setSaveNotice('Preparing scan...')
       console.info('[CalCheck] ACCESS_CHECK_START', { source, user_id: user.id })
       recordPerformanceMetric('ACCESS_CHECK_START', { source })
       let [latestProfile, latestScanCount] = await withTimeout(
@@ -225,33 +281,10 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
       setProfile(latestProfile)
       setLifetimeScans(latestScanCount)
-
-      if (!isUserPro(latestProfile) && latestScanCount >= FREE_SCAN_LIMIT) {
-        console.info('[CalCheck] ACCESS_CHECK_SUCCESS', {
-          source,
-          allowed: false,
-          reason: 'free-limit-reached',
-          scan_count: latestScanCount
-        })
-        setPendingPaywallScanSource(source)
-        setUpgradeError(null)
-        setPaywallOpen(true)
-        return
-      }
-
-      console.info('[CalCheck] ACCESS_CHECK_SUCCESS', {
-        source,
-        allowed: true,
-        scan_count: latestScanCount,
-        is_pro: Boolean(latestProfile?.is_pro)
-      })
-      recordPerformanceMetric('ACCESS_CHECK_SUCCESS', {
-        source,
-        allowed: true,
-        scan_count: latestScanCount,
-        is_pro: Boolean(latestProfile?.is_pro)
-      })
-      startScanFlow(source)
+      setScanAccessReady(true)
+      setSaveNotice('Ready. Tap scan again to open the picker.')
+      setTimeout(() => setSaveNotice(null), 2500)
+      return { profile: latestProfile, scanCount: latestScanCount }
     } catch (error) {
       console.error('[CalCheck] ANALYSIS_FLOW_ABORTED', {
         source,
@@ -273,13 +306,79 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       logSafeError('SUPABASE_OPERATION_FAILED', error, { screen: 'scan', operation: 'check scan access' })
       setSaveNotice(getErrorMessage(error, 'Could not check scan access. Please try again.'))
       setTimeout(() => setSaveNotice(null), 4000)
+      return null
     } finally {
       scanGateInFlightRef.current = false
       setScanGateLoading(false)
     }
   }
 
+  const handleScanRequest = (source = 'camera') => {
+    if (!user?.id) {
+      sessionStorage.setItem(POST_LOGIN_SCAN_INTENT_KEY, source)
+      setAuthModalOpen(true)
+      return
+    }
+
+    if (scanGateInFlightRef.current) {
+      console.warn('[CalCheck] CAMERA_PICKER_BLOCKED_ACCESS_PENDING', {
+        source,
+        reason: 'access-check-already-running'
+      })
+      recordPerformanceMetric('CAMERA_OK_NOOP_PREVENTED', {
+        source,
+        reason: 'access-check-already-running'
+      })
+      logAppEvent('CAMERA_PICKER_BLOCKED_ACCESS_PENDING', {
+        level: 'warn',
+        screen: 'scan',
+        operation: 'check scan access',
+        metadata: { source, reason: 'access-check-already-running' }
+      })
+      return
+    }
+
+    if (!scanAccessReady) {
+      logAppEvent('CAMERA_PICKER_BLOCKED_ACCESS_PENDING', {
+        level: 'warn',
+        screen: 'scan',
+        operation: 'check scan access',
+        metadata: { source, reason: 'access-not-ready' }
+      })
+      refreshScanAccess(source)
+      return
+    }
+
+    if (!pro && lifetimeScans >= FREE_SCAN_LIMIT) {
+      console.info('[CalCheck] ACCESS_CHECK_SUCCESS', {
+        source,
+        allowed: false,
+        reason: 'free-limit-reached',
+        scan_count: lifetimeScans
+      })
+      setPendingPaywallScanSource(source)
+      setUpgradeError(null)
+      setPaywallOpen(true)
+      return
+    }
+
+    console.info('[CalCheck] ACCESS_CHECK_SUCCESS', {
+      source,
+      allowed: true,
+      scan_count: lifetimeScans,
+      is_pro: Boolean(profile?.is_pro)
+    })
+    recordPerformanceMetric('ACCESS_CHECK_SUCCESS', {
+      source,
+      allowed: true,
+      scan_count: lifetimeScans,
+      is_pro: Boolean(profile?.is_pro)
+    })
+    startScanFlow(source)
+  }
+
   const handleImageSelected = (e) => {
+    releasePickerOpening()
     const file = e.target.files?.[0]
     if (!file) {
       console.warn('[CalCheck] CAMERA_OK_NOOP_PREVENTED', {
@@ -293,12 +392,18 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         screen: 'scan',
         operation: 'select image file'
       })
+      e.target.value = ''
+      logAppEvent('CAMERA_INPUT_RESET_AFTER_SELECTION', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'select image file',
+        metadata: { selected: false }
+      })
       return
     }
 
     console.info('[CalCheck] PHOTO_HANDOFF_TO_SCAN', {
       source: 'native-file-input',
-      file_name: file.name,
       file_size: file.size,
       file_type: file.type
     })
@@ -316,6 +421,12 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
     setPendingImage(file)
     setCameraOpen(true)
     e.target.value = ''
+    logAppEvent('CAMERA_INPUT_RESET_AFTER_SELECTION', {
+      level: 'info',
+      screen: 'scan',
+      operation: 'select image file',
+      metadata: { selected: true }
+    })
   }
 
   const handleCloseModal = () => {
@@ -439,6 +550,14 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
     const scanSource = pendingPaywallScanSource
     setPendingPaywallScanSource(null)
+    setScanAccessReady(true)
+
+    if (scanSource === 'upload' || shouldUseNativeCapture()) {
+      setSaveNotice('Ready. Tap scan again to open the picker.')
+      window.setTimeout(() => setSaveNotice(null), 2500)
+      return
+    }
+
     window.setTimeout(() => startScanFlow(scanSource), 350)
   }
 
@@ -510,11 +629,11 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         <div className="space-y-3">
           <button
             onClick={() => handleScanRequest('camera')}
-            disabled={scanGateLoading}
+            disabled={scanGateLoading || pickerOpeningSource === 'camera'}
             className="w-full rounded-[24px] bg-[#151A22] px-6 py-4 font-black text-white shadow-[0_18px_42px_rgba(21,26,34,0.16)] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-70 flex items-center justify-center gap-3"
           >
-            {scanGateLoading ? <Loader2 size={24} className="animate-spin" /> : <Camera size={24} />}
-            <span>{scanGateLoading ? 'Checking access...' : 'Open Camera'}</span>
+            {scanGateLoading || pickerOpeningSource === 'camera' ? <Loader2 size={24} className="animate-spin" /> : <Camera size={24} />}
+            <span>{scanGateLoading ? 'Preparing scan...' : pickerOpeningSource === 'camera' ? 'Opening camera...' : 'Open Camera'}</span>
           </button>
           <input
             ref={cameraInputRef}
@@ -528,11 +647,11 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
           <button
             type="button"
             onClick={() => handleScanRequest('upload')}
-            disabled={scanGateLoading}
+            disabled={scanGateLoading || pickerOpeningSource === 'upload'}
             className="w-full rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white px-6 py-4 font-black text-[#151A22] shadow-[0_14px_34px_rgba(21,26,34,0.06)] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-70 flex items-center justify-center gap-3"
           >
-            <Upload size={24} />
-            <span>Upload Image</span>
+            {pickerOpeningSource === 'upload' ? <Loader2 size={24} className="animate-spin" /> : <Upload size={24} />}
+            <span>{pickerOpeningSource === 'upload' ? 'Opening picker...' : 'Upload Image'}</span>
           </button>
           <input
             ref={uploadInputRef}
