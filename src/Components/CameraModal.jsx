@@ -387,7 +387,7 @@ export default function CameraModal({
       await persistMeal(selectedMealResult)
       setRequestNotice(null)
     } catch (err) {
-      setError(getErrorMessage(err, "Couldn't save meal. Please try again."))
+      setError("Couldn't save meal. Please try again.")
       setRequestNotice(null)
       logSafeError('SAVE_MEAL_FAILED', err, { screen: 'scan', operation: 'save meal' })
     } finally {

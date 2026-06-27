@@ -48,6 +48,16 @@ const MEAL_LOG_COLUMNS = [
   'nutrients_estimated_at'
 ].join(',')
 
+const MEAL_LOG_INTEGER_FIELDS = new Set([
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'meal_score',
+  'image_width',
+  'image_height',
+  'image_size_bytes'
+])
 const USER_PROFILE_COLUMNS = [
   'id',
   'created_at',
@@ -115,9 +125,9 @@ export const uploadMealImage = async (userId, mealId, imagePayload) => {
     image_url: imageUrl,
     thumbnail_path: imagePath,
     thumbnail_url: imageUrl,
-    image_width: diagnostics.upload_width || null,
-    image_height: diagnostics.upload_height || null,
-    image_size_bytes: imagePayload.blob.size || diagnostics.upload_size_bytes || null,
+    image_width: toNullableInteger(diagnostics.upload_width),
+    image_height: toNullableInteger(diagnostics.upload_height),
+    image_size_bytes: toNullableInteger(imagePayload.blob.size || diagnostics.upload_size_bytes),
     image_content_type: 'image/jpeg',
     image_uploaded_at: uploadStartedAt
   }
@@ -148,6 +158,55 @@ export const uploadMealImage = async (userId, mealId, imagePayload) => {
   return imageFields
 }
 
+const normalizeMealLogIntegerFields = (fields, userId) => {
+  const normalized = { ...fields }
+
+  MEAL_LOG_INTEGER_FIELDS.forEach((field) => {
+    if (!(field in normalized)) return
+    const value = normalized[field]
+    if (value == null || value === '') return
+    const numberValue = Number(value)
+
+    if (!Number.isFinite(numberValue)) return
+    if (Number.isInteger(numberValue)) {
+      normalized[field] = numberValue
+      return
+    }
+
+    logSchemaTypeMismatch(userId, field, value, 'integer')
+    normalized[field] = Math.round(numberValue)
+  })
+
+  return normalized
+}
+
+const logSchemaTypeMismatch = (userId, field, value, expectedType) => {
+  console.warn('[CalCheck] MEAL_SAVE_SCHEMA_TYPE_MISMATCH', {
+    field,
+    value,
+    js_type: typeof value,
+    expected_db_type: expectedType,
+    operation: 'saveMealLog'
+  })
+  logAppEvent('MEAL_SAVE_SCHEMA_TYPE_MISMATCH', {
+    user_id: userId,
+    level: 'warn',
+    screen: 'scan',
+    operation: 'saveMealLog',
+    metadata: {
+      field,
+      value,
+      js_type: typeof value,
+      expected_db_type: expectedType
+    }
+  })
+}
+
+const toNullableInteger = (value) => {
+  if (value == null || value === '') return null
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? Math.round(numberValue) : null
+}
 // Meal CRUD operations
 export const saveMealLog = async (userId, mealData, options = {}) => {
   const now = new Date()
@@ -171,19 +230,28 @@ export const saveMealLog = async (userId, mealData, options = {}) => {
   const nutrientConfidence = ['low', 'medium', 'high'].includes(mealFields.nutrient_confidence)
     ? mealFields.nutrient_confidence
     : null
+  const normalizedMealFields = normalizeMealLogIntegerFields(mealFields, userId)
   const insertPayload = {
-    ...mealFields,
+    ...normalizedMealFields,
     user_id: userId,
     timestamp: now.toISOString(),
     timezone,
     local_date: localDate,
     meal_type: mealType,
-    source: options.source || mealFields.source || null,
+    source: options.source || normalizedMealFields.source || null,
     nutrients_json: hasNutrients ? mealFields.nutrients_json : null,
     nutrient_confidence: hasNutrients ? nutrientConfidence : null,
     nutrient_source: hasNutrients ? 'ai_estimate' : null,
     nutrients_estimated_at: hasNutrients ? now.toISOString() : null
   }
+
+  console.info('[CalCheck] saveMealLog integer field validation', {
+    calories: insertPayload.calories,
+    protein: insertPayload.protein,
+    carbs: insertPayload.carbs,
+    fat: insertPayload.fat,
+    meal_score: insertPayload.meal_score
+  })
 
   console.info('[CalCheck] saveMealLog timezone detection', {
     intl_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
