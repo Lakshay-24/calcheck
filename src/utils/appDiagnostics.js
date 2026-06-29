@@ -180,7 +180,7 @@ const sanitizeMetadata = (value) => {
   return { truncated: true, preview: serialized.slice(0, MAX_METADATA_CHARS) }
 }
 
-const isSensitiveKey = (key) => /token|secret|apikey|api_key|authorization|password|base64|blob|image|photo|prompt|file|key|payment|card|email/i.test(key)
+const isSensitiveKey = (key) => /token|secret|apikey|api_key|authorization|password|base64|blob|object_url|preview_url|data_url|image_data|photo_data|raw_image|raw_photo|prompt|filename|file_name|path|key|payment|card|email/i.test(key)
 const sanitizeString = (value) => value.length > 500 ? `${value.slice(0, 500)}...` : value
 const safeText = (value) => {
   const text = String(value || '').trim()

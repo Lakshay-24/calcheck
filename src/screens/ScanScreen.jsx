@@ -571,6 +571,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
             user={user}
             onMealSaved={handleMealSaved}
             pendingImage={pendingImage}
+            onPendingImageConsumed={() => setPendingImage(null)}
             onAnalysisComplete={handleAnalysisComplete}
           />
         </Suspense>

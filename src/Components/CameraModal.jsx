@@ -38,6 +38,7 @@ export default function CameraModal({
   user,
   onMealSaved,
   pendingImage = null,
+  onPendingImageConsumed,
   onAnalysisComplete
 }) {
   const [stage, setStage] = useState('camera')
@@ -56,6 +57,8 @@ export default function CameraModal({
   const previewUrlRef = useRef(null)
   const retryImageSourceRef = useRef(null)
   const retrySourceLabelRef = useRef(null)
+  const openedWithPendingImageRef = useRef(false)
+  const processingRef = useRef(false)
 
   useEffect(() => {
     if (!isOpen) {
@@ -75,7 +78,9 @@ export default function CameraModal({
     setAnalysisResult(null)
 
     if (pendingImage) {
+      openedWithPendingImageRef.current = true
       prepareAndAnalyzePhoto(pendingImage, 'upload')
+      onPendingImageConsumed?.()
       return
     }
 
@@ -86,7 +91,7 @@ export default function CameraModal({
       uploadImageRef.current = null
       stopDesktopCamera()
     }
-  }, [isOpen, pendingImage])
+  }, [isOpen])
 
   const startDesktopCamera = async () => {
     logAppEvent('CAMERA_OPEN_REQUESTED', {
@@ -146,6 +151,17 @@ export default function CameraModal({
   }
 
   const prepareAndAnalyzePhoto = async (imageSource, sourceLabel) => {
+    if (processingRef.current) {
+      logAppEvent('CAMERA_ANALYSIS_DUPLICATE_PREVENTED', {
+        level: 'warn',
+        screen: 'scan',
+        operation: 'prepare and analyze photo',
+        metadata: { source: sourceLabel }
+      })
+      return
+    }
+
+    processingRef.current = true
     const requestId = analysisRequestRef.current + 1
     analysisRequestRef.current = requestId
     retryImageSourceRef.current = imageSource
@@ -261,7 +277,7 @@ export default function CameraModal({
         screen: 'scan',
         operation: failedDuringCompression ? 'compress image' : 'analyze food',
         normalized_message: message,
-        metadata: getImageFailureMetadata(imageSource, sourceLabel)
+        metadata: getImageFailureMetadata(imageSource, sourceLabel, failedDuringCompression ? 'compress' : 'analyze')
       })
       if (lowMemoryFallback) {
         logAppEvent('IMAGE_LOW_MEMORY_FALLBACK', {
@@ -269,7 +285,7 @@ export default function CameraModal({
           screen: 'scan',
           operation: 'compress image',
           normalized_message: message,
-          metadata: getImageFailureMetadata(imageSource, sourceLabel)
+          metadata: getImageFailureMetadata(imageSource, sourceLabel, failedDuringCompression ? 'compress' : 'analyze')
         })
       }
       console.error('[CalCheck] ANALYSIS_FLOW_ABORTED', {
@@ -299,6 +315,12 @@ export default function CameraModal({
       setStage('error')
       clearPreviewUrl()
       uploadImageRef.current = null
+      if (failedDuringCompression) {
+        retryImageSourceRef.current = null
+        retrySourceLabelRef.current = null
+      }
+    } finally {
+      processingRef.current = false
     }
   }
 
@@ -397,6 +419,7 @@ export default function CameraModal({
 
   const handleClose = () => {
     analysisRequestRef.current += 1
+    processingRef.current = false
     setStage('camera')
     setCapturedImage(null)
     setAnalysisResult(null)
@@ -405,6 +428,7 @@ export default function CameraModal({
     setCameraError(null)
     setFlowStatus(null)
     uploadImageRef.current = null
+    openedWithPendingImageRef.current = false
     retryImageSourceRef.current = null
     retrySourceLabelRef.current = null
     clearPreviewUrl()
@@ -414,6 +438,7 @@ export default function CameraModal({
 
   const handleRetake = () => {
     analysisRequestRef.current += 1
+    processingRef.current = false
     setCapturedImage(null)
     setAnalysisResult(null)
     setError(null)
@@ -422,7 +447,7 @@ export default function CameraModal({
     uploadImageRef.current = null
     clearPreviewUrl()
     setStage('camera')
-    if (pendingImage) {
+    if (openedWithPendingImageRef.current || pendingImage) {
       onClose()
       return
     }
@@ -442,6 +467,13 @@ export default function CameraModal({
       recordPerformanceMetric('CAMERA_OK_NOOP_PREVENTED', {
         source: sourceLabel,
         reason: 'missing-retry-image'
+      })
+      logAppEvent('IMAGE_PROCESSING_STAGE_FAILED', {
+        level: 'warn',
+        screen: 'scan',
+        operation: 'retry image analysis',
+        normalized_message: 'Retry image source was unavailable.',
+        metadata: { source: sourceLabel, stage: 'retry' }
       })
       setError('Photo is no longer available. Please retake it.')
       return
@@ -538,18 +570,35 @@ const isLikelyLowMemoryImageError = (error) => {
   )
 }
 
-const getImageFailureMetadata = (source, sourceLabel) => {
+const getImageFailureMetadata = (source, sourceLabel, stage = 'unknown') => {
   const isFile = typeof File !== 'undefined' && source instanceof File
   const isBlob = typeof Blob !== 'undefined' && source instanceof Blob
+  const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent || ''
   return {
     source: sourceLabel,
-    original_file_size_bytes: isFile || isBlob ? source.size : null,
-    original_file_type: isFile || isBlob ? source.type || null : null,
-    device_memory_gb: typeof navigator === 'undefined' ? null : navigator.deviceMemory || null,
+    stage,
+    file_size_bytes: isFile || isBlob ? source.size : null,
+    file_type: isFile || isBlob ? source.type || null : null,
+    file_last_modified_age_ms: isFile && Number.isFinite(source.lastModified) ? Math.max(0, Date.now() - source.lastModified) : null,
     viewport_width: typeof window === 'undefined' ? null : window.innerWidth,
-    viewport_height: typeof window === 'undefined' ? null : window.innerHeight
+    viewport_height: typeof window === 'undefined' ? null : window.innerHeight,
+    device_memory: typeof navigator === 'undefined' ? null : navigator.deviceMemory || null,
+    hardware_concurrency: typeof navigator === 'undefined' ? null : navigator.hardwareConcurrency || null,
+    user_agent_family: getUserAgentFamily(userAgent),
+    is_pwa: typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator?.standalone === true),
+    is_online: typeof navigator === 'undefined' ? true : navigator.onLine
   }
 }
+
+const getUserAgentFamily = (userAgent) => {
+  if (/SamsungBrowser/i.test(userAgent)) return 'samsung-browser'
+  if (/EdgA|EdgiOS|Edg\//i.test(userAgent)) return 'edge'
+  if (/CriOS|Chrome/i.test(userAgent)) return 'chrome'
+  if (/Firefox|FxiOS/i.test(userAgent)) return 'firefox'
+  if (/Safari/i.test(userAgent)) return 'safari'
+  return 'unknown'
+}
+
 function PreparingView({ status }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-brand-50 to-white min-h-[60vh] text-center">
