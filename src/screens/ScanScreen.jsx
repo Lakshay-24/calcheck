@@ -31,7 +31,7 @@ const loadDescribeMealModal = () => import('../Components/DescribeMealModal')
 const CameraModal = lazy(loadCameraModal)
 const DescribeMealModal = lazy(loadDescribeMealModal)
 
-export default function ScanScreen({ user, resumeSignal = 0 }) {
+export default function ScanScreen({ user, resumeSignal = 0, authStatus = user ? 'authenticated' : 'signed_out' }) {
   const cameraInputRef = useRef(null)
   const uploadInputRef = useRef(null)
   const scanGateInFlightRef = useRef(false)
@@ -65,6 +65,16 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const refreshing = todayMealState.isRefreshing
   const pro = isUserPro(profile)
 
+
+  useEffect(() => {
+    if (user || authStatus !== 'signed_out') return
+    logAppEvent('AUTH_SIGNIN_UI_RENDERED', {
+      level: 'info',
+      screen: 'scan',
+      operation: 'auth sign-in ui',
+      metadata: { auth_status: authStatus }
+    })
+  }, [authStatus, user])
 
   useEffect(() => {
     if (!user?.id) {
@@ -712,7 +722,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
             </span>
           </div>
 
-          {!user && (
+          {!user && authStatus === 'signed_out' && (
   <div className="bg-white rounded-2xl p-4 border border-brand-300/50">
     <p className="font-semibold text-gray-900 mb-1">
       Save meals and track progress

@@ -38,6 +38,25 @@ const logAuthOutcome = (type, details = {}) => {
   console.info(`[CalCheck] ${type}`, details)
 }
 
+const getAuthDiagnosticMetadata = (details = {}) => ({
+  duration_ms: details.duration_ms ?? null,
+  has_session: Boolean(details.hasSession ?? details.has_session),
+  auth_status: details.auth_status || null,
+  is_pwa: typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator?.standalone === true),
+  is_online: typeof navigator === 'undefined' ? true : navigator.onLine,
+  event_source: details.source || details.event_source || null
+})
+
+const logAuthDiagnostic = (eventName, details = {}, level = 'info') => {
+  logAppEvent(eventName, {
+    level,
+    screen: 'app',
+    operation: 'auth restore',
+    duration_ms: details.duration_ms ?? null,
+    metadata: getAuthDiagnosticMetadata(details)
+  })
+}
+
 const isIosStandalonePwa = () => {
   if (typeof navigator === 'undefined' || typeof window === 'undefined') return false
 
@@ -118,7 +137,7 @@ async function ensureUserProfile(user, source = 'unknown') {
 function App() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [authRestorePending, setAuthRestorePending] = useState(true)
+  const [authStatus, setAuthStatus] = useState('restoring')
   const [resumeSignal, setResumeSignal] = useState(0)
   const [appRecoveryKey, setAppRecoveryKey] = useState(0)
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(
@@ -215,6 +234,11 @@ function App() {
           preservedUserId: userRef.current?.id || null,
           error: sessionResult.error
         })
+        logAuthDiagnostic('AUTH_RESTORE_FAILED', {
+          source: commitSource,
+          auth_status: userRef.current?.id ? 'authenticated' : 'restoring'
+        }, 'warn')
+        setAuthStatus(userRef.current?.id ? 'authenticated' : 'restoring')
         setLoading(false)
         return
       }
@@ -263,6 +287,7 @@ function App() {
       if (authCheckRef.current !== checkId) return
 
       const sessionUser = activeSession?.user || null
+      setAuthStatus(sessionUser ? 'authenticated' : 'signed_out')
       if (!sessionUser) {
         logAuthOutcome('AUTH_SIGNED_OUT', {
           source: commitSource,
@@ -286,8 +311,12 @@ function App() {
         hasSession: Boolean(activeSession),
         user_id: sessionUser?.id || null
       })
+      logAuthDiagnostic(sessionUser ? 'AUTH_RESTORE_SUCCESS' : 'AUTH_RESTORE_SIGNED_OUT', {
+        source: commitSource,
+        hasSession: Boolean(activeSession),
+        auth_status: sessionUser ? 'authenticated' : 'signed_out'
+      })
       setUser(sessionUser)
-      setAuthRestorePending(false)
       setLoading(false)
       ensureUserProfile(sessionUser, commitSource)
       console.info('[CalCheck] data refresh completed', { source: commitSource, target: 'auth' })
@@ -296,6 +325,7 @@ function App() {
     try {
       console.info('[CalCheck] data refresh started', { source, target: 'auth' })
       logAuthOutcome('SESSION_RESTORE_START', { source, checkId, timeoutMs: restoreTimeoutMs })
+      logAuthDiagnostic('AUTH_RESTORE_STARTED', { source, auth_status: userRef.current?.id ? 'authenticated' : 'restoring' })
       console.info('[CalCheck] USER_FETCH_START', {
         source,
         checkId,
@@ -323,6 +353,10 @@ function App() {
           stage: 'session restore',
           preservedUserId: userRef.current?.id || null
         })
+        logAuthDiagnostic('AUTH_RESTORE_TIMEOUT', {
+          source,
+          auth_status: userRef.current?.id ? 'authenticated' : 'restoring'
+        }, 'warn')
         logAuthOutcome('AUTH_TIMEOUT', {
           source,
           checkId,
@@ -346,9 +380,13 @@ function App() {
               preservedUserId: userRef.current?.id || null,
               error
             })
+            logAuthDiagnostic('AUTH_RESTORE_FAILED', {
+              source: `${source}-late-session`,
+              auth_status: userRef.current?.id ? 'authenticated' : 'restoring'
+            }, 'warn')
           })
         if (userRef.current?.id) {
-          setAuthRestorePending(false)
+          setAuthStatus('authenticated')
           setLoading(false)
           console.info('[CalCheck] data refresh completed', {
             source,
@@ -358,7 +396,7 @@ function App() {
           })
           return
         }
-        setAuthRestorePending(true)
+        setAuthStatus('restoring')
         setLoading(false)
         return
       }
@@ -370,6 +408,10 @@ function App() {
         preservedUserId: userRef.current?.id || null,
         error
       })
+      logAuthDiagnostic('AUTH_RESTORE_FAILED', {
+        source,
+        auth_status: userRef.current?.id ? 'authenticated' : 'restoring'
+      }, 'warn')
       logAuthOutcome('AUTH_NETWORK_ERROR', {
         source,
         checkId,
@@ -383,7 +425,7 @@ function App() {
         operation: 'auth check'
       })
       if (!userRef.current?.id) {
-        setAuthRestorePending(true)
+        setAuthStatus('restoring')
       }
     } finally {
       if (authCheckRef.current === checkId) {
@@ -424,11 +466,12 @@ function App() {
           stage: 'auth listener',
           previousUserId: userRef.current?.id || null
         })
-        setAuthRestorePending(false)
+        logAuthDiagnostic('AUTH_RESTORE_SIGNED_OUT', { source: `auth-${event}`, auth_status: 'signed_out' })
+        setAuthStatus('signed_out')
       }
       setUser(sessionUser)
       if (sessionUser) {
-        setAuthRestorePending(false)
+        setAuthStatus('authenticated')
         ensureUserProfile(sessionUser, `auth-${event}`)
       }
     })
@@ -522,8 +565,10 @@ function App() {
   }, [loading, revalidateAuth])
 
   if (loading) {
-    return <ScreenSkeleton />
+    return <AuthRecoveryScreen authStatus={authStatus} source="initial-loading" />
   }
+
+  const isAuthRestoring = authStatus === 'restoring' && !user
 
   return (
     <ErrorBoundary>
@@ -536,9 +581,11 @@ function App() {
             <Route
               path="/"
               element={
-                !hasSeenOnboarding && !user
+                isAuthRestoring
+                  ? <AuthRecoveryScreen authStatus={authStatus} source="root-route" />
+                  : !hasSeenOnboarding && !user
                   ? <OnboardingScreen onComplete={() => setHasSeenOnboarding(true)} />
-                  : <ScanScreen key={`scan-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} />
+                  : <ScanScreen key={`scan-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} authStatus={authStatus} />
               }
             />
             <Route
@@ -546,8 +593,8 @@ function App() {
               element={
                 user
                   ? <LazyRouteFallback screen="progress" fallback={<ProgressSkeleton />}><ProgressScreen key={`progress-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} /></LazyRouteFallback>
-                  : authRestorePending
-                    ? <AuthRecoveryScreen />
+                  : isAuthRestoring
+                    ? <AuthRecoveryScreen authStatus={authStatus} source="auth-route" />
                     : <Navigate to="/" />
               }
             />
@@ -556,8 +603,8 @@ function App() {
               element={
                 user
                   ? <LazyRouteFallback screen="profile" fallback={<ProfileSkeleton />}><ProfileScreen user={user} /></LazyRouteFallback>
-                  : authRestorePending
-                    ? <AuthRecoveryScreen />
+                  : isAuthRestoring
+                    ? <AuthRecoveryScreen authStatus={authStatus} source="auth-route" />
                     : <Navigate to="/" />
               }
             />
@@ -572,7 +619,12 @@ function App() {
   )
 }
 
-function AuthRecoveryScreen() {
+function AuthRecoveryScreen({ authStatus = 'restoring', source = 'unknown' }) {
+  useEffect(() => {
+    logAuthDiagnostic('APP_AUTH_SHELL_RENDERED', { source, auth_status: authStatus })
+    logAuthDiagnostic('AUTH_SIGNIN_UI_SUPPRESSED_DURING_RESTORE', { source, auth_status: authStatus })
+  }, [authStatus, source])
+
   return (
     <div className="h-full w-full flex items-center justify-center bg-[#FFF9F2] px-6">
       <div className="w-full max-w-sm rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white/90 p-6 text-center shadow-[0_18px_50px_rgba(21,26,34,0.08)]">
