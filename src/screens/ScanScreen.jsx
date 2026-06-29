@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react'
-import { Camera, Check, Loader2, Upload, X } from 'lucide-react'
+import { Camera, Check, FileText, Loader2, Upload, X } from 'lucide-react'
 import { InstallButton, SmartInstallPrompt } from '../Components/InstallApp'
 import { MealCard, MealDetailSheet } from '../Components/MealCard'
 import {
@@ -27,7 +27,9 @@ const POST_LOGIN_SCAN_INTENT_KEY = 'calcheck-post-login-scan-intent'
 const ACCESS_CHECK_TIMEOUT_MS = 8000
 const PICKER_OPEN_RELEASE_MS = 1600
 const loadCameraModal = () => import('../Components/CameraModal')
+const loadDescribeMealModal = () => import('../Components/DescribeMealModal')
 const CameraModal = lazy(loadCameraModal)
+const DescribeMealModal = lazy(loadDescribeMealModal)
 
 export default function ScanScreen({ user, resumeSignal = 0 }) {
   const cameraInputRef = useRef(null)
@@ -42,6 +44,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   const [pendingImage, setPendingImage] = useState(null)
   const [saveNotice, setSaveNotice] = useState(null)
   const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [describeMealOpen, setDescribeMealOpen] = useState(false)
   const [paywallOpen, setPaywallOpen] = useState(false)
   const [authLoading, setAuthLoading] = useState(false)
   const [upgradeLoading, setUpgradeLoading] = useState(false)
@@ -131,6 +134,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
   useEffect(() => {
     preloadLazyModuleWhenIdle('CameraModal', loadCameraModal, { screen: 'scan', reason: 'scan-mounted' })
+    preloadLazyModuleWhenIdle('DescribeMealModal', loadDescribeMealModal, { screen: 'scan', reason: 'scan-mounted' })
 
     return () => {
       if (pickerReleaseTimerRef.current) {
@@ -577,6 +581,17 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         </Suspense>
       )}
 
+      {describeMealOpen && (
+        <Suspense fallback={<CameraModalFallback />}>
+          <DescribeMealModal
+            isOpen={describeMealOpen}
+            onClose={() => setDescribeMealOpen(false)}
+            user={user}
+            onMealSaved={handleMealSaved}
+          />
+        </Suspense>
+      )}
+
       <AuthModal
         isOpen={authModalOpen}
         isLoading={authLoading}
@@ -618,7 +633,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
         {proSuccessVisible && (
           <div className="bg-gradient-to-r from-brand-50 to-white border border-brand-300/70 rounded-2xl p-4 shadow-[0_14px_34px_rgba(17,245,246,0.12)]">
-            <p className="text-base font-bold text-gray-900">🎉 Welcome to CalCheck Pro</p>
+            <p className="text-base font-bold text-gray-900">Welcome to CalCheck Pro</p>
             <p className="text-sm text-gray-600 mt-1">Unlimited scans unlocked.</p>
           </div>
         )}
@@ -662,6 +677,15 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
             className="hidden"
             onChange={handleImageSelected}
           />
+
+          <button
+            type="button"
+            onClick={() => setDescribeMealOpen(true)}
+            className="w-full rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white px-6 py-4 font-black text-[#151A22] shadow-[0_14px_34px_rgba(21,26,34,0.06)] transition active:scale-95 flex items-center justify-center gap-3"
+          >
+            <FileText size={24} />
+            <span>Describe Meal</span>
+          </button>
         </div>
 
         {user && !pro && (
@@ -710,9 +734,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 </button>
 
 
-    <p className="text-xs text-gray-400 text-center mt-3">
-      Save meals • Track progress • Sync across devices
-    </p>
+    <p className="text-xs text-gray-400 text-center mt-3">Save meals - Track progress - Sync across devices</p>
   </div>
 )}
           <div className="space-y-2">
@@ -776,7 +798,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
         ) : meals.length === 0 ? (
           <div className="rounded-[24px] border border-[rgba(21,26,34,0.08)] bg-white px-4 py-8 text-center shadow-[0_14px_36px_rgba(21,26,34,0.06)]">
             <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
-              <span className="text-3xl">📷</span>
+              <span className="text-3xl">Photo</span>
             </div>
             <p className="text-gray-600 font-medium mb-1">No meals today yet</p>
             <p className="text-sm text-gray-500">Tap "Open Camera" to start tracking</p>
@@ -942,7 +964,7 @@ function PaywallModal({ isOpen, isLoading, error, status, onClose, onUpgrade }) 
 
           <div className="mt-6 rounded-2xl bg-brand-50 border border-brand-300/60 p-4">
             <p className="text-sm text-gray-600">CalCheck Pro</p>
-            <p className="text-3xl font-bold text-gray-900 mt-1">₹69/month</p>
+            <p className="text-3xl font-bold text-gray-900 mt-1">Rs 69/month</p>
           </div>
 
           {error && (

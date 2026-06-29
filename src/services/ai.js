@@ -196,3 +196,97 @@ export const analyzeFood = async (imageData) => {
 
   return normalizeFoodAnalysis(data)
 }
+export const analyzeMealText = async (description, options = {}) => {
+  const trimmed = String(description || '').trim()
+  const source = options.source === 'voice_transcript' ? 'voice_transcript' : 'text'
+
+  if (!trimmed || trimmed.length < 3) {
+    return {
+      loggable: false,
+      input_type: 'unclear_food',
+      message: 'I need a little more detail. For example: 2 rotis, dal, rice, curd.'
+    }
+  }
+
+  const startedAt = performance.now()
+  const { data, error } = await trackApiRequest('analyze-meal-text', () => supabase.functions.invoke('analyze-meal-text', {
+    body: { description: trimmed, source }
+  }))
+
+  if (error) {
+    logSafeError('TEXT_MEAL_ANALYZE_FAILED', error, { screen: 'scan', operation: 'analyze-meal-text' })
+    logAppError('TEXT_MEAL_ANALYZE_FAILED', error, {
+      screen: 'scan',
+      operation: 'analyze-meal-text',
+      metadata: { source, description_length: trimmed.length }
+    })
+    throw new Error(getErrorMessage(error, "Couldn't analyze this meal. Please try again."))
+  }
+
+  if (data?.error) {
+    const analysisError = new Error(data.error)
+    logAppError('TEXT_MEAL_ANALYZE_FAILED', analysisError, {
+      screen: 'scan',
+      operation: 'analyze-meal-text',
+      metadata: { source, description_length: trimmed.length }
+    })
+    throw new Error(getErrorMessage(analysisError, "Couldn't analyze this meal. Please try again."))
+  }
+
+  recordPerformanceMetric('text meal analyze duration', {
+    source,
+    duration_ms: Math.round(performance.now() - startedAt),
+    input_type: data?.input_type || null,
+    loggable: Boolean(data?.loggable)
+  })
+
+  if (data?.loggable === false) return data
+
+  return {
+    ...normalizeFoodAnalysis({
+      ...data,
+      confidence: typeof data?.confidence === 'number' ? data.confidence : 0.55
+    }),
+    source,
+    input_type: data?.input_type || 'meal'
+  }
+}
+
+export const transcribeMealVoice = async (audioBlob, options = {}) => {
+  if (!audioBlob) throw new Error("Couldn't understand that. Please try again or type your meal.")
+
+  const formData = new FormData()
+  const mimeType = audioBlob.type || 'audio/webm'
+  const extension = mimeType.includes('mp4') ? 'm4a' : mimeType.includes('ogg') ? 'ogg' : 'webm'
+  formData.append('audio', audioBlob, `meal-audio.${extension}`)
+
+  const startedAt = performance.now()
+  const { data, error } = await trackApiRequest('transcribe-meal-voice', () => supabase.functions.invoke('transcribe-meal-voice', {
+    body: formData
+  }))
+
+  if (error) {
+    logSafeError('VOICE_TRANSCRIPTION_FAILED', error, { screen: 'scan', operation: 'transcribe-meal-voice' })
+    logAppError('VOICE_TRANSCRIPTION_FAILED', error, {
+      screen: 'scan',
+      operation: 'transcribe-meal-voice',
+      metadata: { audio_size_bytes: audioBlob.size || null, audio_type: mimeType, source: options.source || 'voice' }
+    })
+    throw new Error(getErrorMessage(error, "Couldn't understand that. Please try again or type your meal."))
+  }
+
+  if (data?.error) {
+    throw new Error(getErrorMessage(new Error(data.error), "Couldn't understand that. Please try again or type your meal."))
+  }
+
+  const transcript = String(data?.transcript || '').trim()
+  if (!transcript) throw new Error("Couldn't understand that. Please try again or type your meal.")
+
+  recordPerformanceMetric('voice transcription duration', {
+    duration_ms: Math.round(performance.now() - startedAt),
+    audio_size_bytes: audioBlob.size || null,
+    transcript_length: transcript.length
+  })
+
+  return transcript
+}

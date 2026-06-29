@@ -56,6 +56,7 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
   const savingState = isSaving || saving
   const confidence = adjustedResult?.confidence ?? null
   const isLowConfidence = confidence !== null && confidence < 0.6
+  const sourceNote = getSourceNote(adjustedResult?.source)
 
   const getConfidenceLabel = (value) => {
     if (value >= 0.8) return { text: 'High confidence', className: 'bg-brand-50 text-brand-700' }
@@ -115,6 +116,11 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
               </span>
             )}
           </div>
+          {sourceNote && (
+            <p className="text-sm text-brand-700 bg-brand-50 border border-brand-300/60 rounded-lg p-3 mt-3">
+              {sourceNote}
+            </p>
+          )}
           {isLowConfidence && (
             <p className="text-sm text-orange-700 bg-orange-50 border border-orange-200 rounded-lg p-3 mt-3">
               This guess may be wrong. Tap another prediction below if it looks closer.
@@ -141,7 +147,7 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
                     }`}
                     title={option.disabled ? 'This prediction cannot be selected' : undefined}
                   >
-                    {option.id === selectedOption?.id && '✓ '}
+                    {option.id === selectedOption?.id && 'Selected: '}
                     {option.label} ({Math.round((option.confidence ?? 0) * 100)}%)
                   </button>
                 ))}
@@ -291,6 +297,13 @@ export default function ResultsScreen({ result, image, onSave, onRetake, user, i
       </div>
     </div>
   )
+}
+
+const getSourceNote = (source) => {
+  if (source === 'text' || source === 'voice_transcript') {
+    return 'Estimated from your description. Edit portions if needed.'
+  }
+  return null
 }
 
 const buildPredictionOptions = (result) => {
