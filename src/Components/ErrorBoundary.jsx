@@ -21,14 +21,14 @@ export default class ErrorBoundary extends React.Component {
     if (!this.state.hasError) return this.props.children
 
     return (
-      <div className="h-screen w-screen bg-white flex items-center justify-center px-6">
-        <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
-          <h1 className="text-xl font-bold text-gray-900">Something went wrong</h1>
-          <p className="mt-2 text-sm text-gray-500">Reload CalCheck</p>
+      <div className="flex h-screen w-screen items-center justify-center bg-[#FFF9F2] px-6 text-[#151A22]">
+        <div className="w-full max-w-sm rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white/90 p-6 text-center shadow-[0_18px_50px_rgba(21,26,34,0.08)]">
+          <h1 className="text-xl font-black text-[#151A22]">Something went wrong</h1>
+          <p className="mt-2 text-sm font-semibold text-[#6B7280]">Reload CalCheck and try again.</p>
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="mt-5 w-full rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white"
+            className="mt-5 w-full rounded-[18px] bg-[#151A22] px-4 py-3 text-sm font-black text-white shadow-[0_14px_34px_rgba(21,26,34,0.14)]"
           >
             Reload
           </button>

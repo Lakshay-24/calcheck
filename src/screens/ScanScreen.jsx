@@ -1,6 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { Camera, Check, Loader2, Upload, X } from 'lucide-react'
-import CameraModal, { restorePendingMeal } from '../Components/CameraModal'
 import { InstallButton, SmartInstallPrompt } from '../Components/InstallApp'
 import { MealCard, MealDetailSheet } from '../Components/MealCard'
 import {
@@ -17,6 +16,7 @@ import {
 import { signInWithGoogle } from '../services/supabase'
 import { recordPerformanceMetric, trackApiRequest, trackStartupStep } from '../services/diagnostics'
 import { logAppEvent } from '../utils/appDiagnostics'
+import { preloadLazyModule, preloadLazyModuleWhenIdle } from '../utils/lazyPreload'
 import { formatLocalWeekday, getUserTimezone } from '../utils/timezone'
 import { getErrorMessage, logSafeError } from '../utils/errorUtils'
 import { INSTALL_PROMPT_SEEN_KEY } from '../hooks/usePwaInstall'
@@ -26,6 +26,8 @@ const FREE_SCAN_LIMIT = 2
 const POST_LOGIN_SCAN_INTENT_KEY = 'calcheck-post-login-scan-intent'
 const ACCESS_CHECK_TIMEOUT_MS = 8000
 const PICKER_OPEN_RELEASE_MS = 1600
+const loadCameraModal = () => import('../Components/CameraModal')
+const CameraModal = lazy(loadCameraModal)
 
 export default function ScanScreen({ user, resumeSignal = 0 }) {
   const cameraInputRef = useRef(null)
@@ -113,7 +115,8 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
   useEffect(() => {
     if (!user?.id) return
 
-    restorePendingMeal(user)
+    loadCameraModal()
+      .then(({ restorePendingMeal }) => restorePendingMeal(user))
       .then((saved) => {
         if (saved) {
           setSaveNotice('Your meal was saved after signing in.')
@@ -127,16 +130,9 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
 
   useEffect(() => {
-    return () => {
-      if (pickerReleaseTimerRef.current) {
-        window.clearTimeout(pickerReleaseTimerRef.current)
-      }
-    }
-  }, [])
+    preloadLazyModuleWhenIdle('CameraModal', loadCameraModal, { screen: 'scan', reason: 'scan-mounted' })
 
-  useEffect(() => {
     return () => {
-      // cleanup picker release timer
       if (pickerReleaseTimerRef.current) {
         window.clearTimeout(pickerReleaseTimerRef.current)
       }
@@ -419,6 +415,7 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
       metadata: { source: 'native-file-input', file_size: file.size, file_type: file.type }
     })
     setPendingImage(file)
+    preloadLazyModule('CameraModal', loadCameraModal, { screen: 'scan', reason: 'image-selected' })
     setCameraOpen(true)
     e.target.value = ''
     logAppEvent('CAMERA_INPUT_RESET_AFTER_SELECTION', {
@@ -566,14 +563,18 @@ export default function ScanScreen({ user, resumeSignal = 0 }) {
 
   return (
     <div className="h-full w-full overflow-y-auto bg-[#FFF9F2] pb-24 text-[#151A22]">
-      <CameraModal
-        isOpen={cameraOpen}
-        onClose={handleCloseModal}
-        user={user}
-        onMealSaved={handleMealSaved}
-        pendingImage={pendingImage}
-        onAnalysisComplete={handleAnalysisComplete}
-      />
+      {(cameraOpen || pendingImage) && (
+        <Suspense fallback={<CameraModalFallback />}>
+          <CameraModal
+            isOpen={cameraOpen}
+            onClose={handleCloseModal}
+            user={user}
+            onMealSaved={handleMealSaved}
+            pendingImage={pendingImage}
+            onAnalysisComplete={handleAnalysisComplete}
+          />
+        </Suspense>
+      )}
 
       <AuthModal
         isOpen={authModalOpen}
@@ -815,6 +816,28 @@ const withTimeout = (promise, ms, message) => {
   })
 }
 
+function CameraModalFallback() {
+  useEffect(() => {
+    logAppEvent('LAZY_ROUTE_FALLBACK_RENDERED', {
+      level: 'info',
+      screen: 'scan',
+      operation: 'camera modal fallback'
+    })
+  }, [])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 px-0 sm:items-center sm:px-4">
+      <div className="w-full max-w-md rounded-t-[28px] border border-[rgba(21,26,34,0.08)] bg-[#FFF9F2] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.24)] sm:rounded-[28px]">
+        <div className="mx-auto h-12 w-12 rounded-full border-4 border-[#E7D9C2] border-t-[#151A22] motion-safe:animate-spin" />
+        <div className="mt-5 space-y-3">
+          <div className="h-4 w-36 rounded-full bg-[#ECE7DD] motion-safe:animate-pulse" />
+          <div className="h-3 w-full rounded-full bg-[#ECE7DD] motion-safe:animate-pulse" />
+          <div className="h-3 w-2/3 rounded-full bg-[#ECE7DD] motion-safe:animate-pulse" />
+        </div>
+      </div>
+    </div>
+  )
+}
 function MealHistorySkeleton() {
   return (
     <div className="space-y-3 animate-pulse">

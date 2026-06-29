@@ -7,9 +7,10 @@ import { recordStartupStep, trackApiRequest, trackStartupStep } from './services
 import { abortLifecycleRequests, recordAppLifecycleEvent } from './services/lifecycle'
 import { preloadRazorpayCheckout } from './services/subscriptions'
 import { logSafeError } from './utils/errorUtils'
-import { setDiagnosticsUser } from './utils/appDiagnostics'
+import { logAppEvent, setDiagnosticsUser } from './utils/appDiagnostics'
+import { preloadLazyModuleWhenIdle } from './utils/lazyPreload'
 import ErrorBoundary from './Components/ErrorBoundary'
-import { ProgressSkeleton, ScreenSkeleton } from './Components/Skeletons'
+import { ProgressSkeleton, ProfileSkeleton, ScreenSkeleton } from './Components/Skeletons'
 import { MealDataProvider } from './data/MealDataProvider'
 import './index.css'
 
@@ -131,6 +132,26 @@ function App() {
   const appReadyLoggedRef = useRef(false)
 
   useEffect(() => {
+    const displayMode = window.matchMedia?.('(display-mode: standalone)')?.matches
+      ? 'standalone'
+      : 'browser'
+    const buildDetails = {
+      app_version: typeof __APP_VERSION__ === 'undefined' ? '0.1.0' : __APP_VERSION__,
+      build_timestamp: typeof __BUILD_TIMESTAMP__ === 'undefined' ? null : __BUILD_TIMESTAMP__,
+      display_mode: displayMode,
+      user_agent: (navigator.userAgent || 'unknown').slice(0, 180)
+    }
+
+    console.info('[CalCheck] APP_BUILD_LOADED', buildDetails)
+    logAppEvent('APP_BUILD_LOADED', {
+      level: 'info',
+      screen: 'app',
+      operation: 'app build loaded',
+      metadata: buildDetails
+    })
+  }, [])
+
+  useEffect(() => {
     userRef.current = user
     setDiagnosticsUser(user)
   }, [user])
@@ -154,11 +175,9 @@ function App() {
       window.setTimeout(() => {
         preloadRazorpayCheckout('app-ready-idle')
       }, 1500)
-      runWhenIdle(() => {
-        preloadProgressScreen()
-        preloadProfileScreen()
-        preloadInfoPage()
-      })
+      preloadLazyModuleWhenIdle('ProgressScreen', preloadProgressScreen, { screen: 'app', reason: 'app-ready' })
+      preloadLazyModuleWhenIdle('ProfileScreen', preloadProfileScreen, { screen: 'app', reason: 'app-ready' })
+      preloadLazyModuleWhenIdle('InfoPage', preloadInfoPage, { screen: 'app', reason: 'app-ready' })
     }
   }, [loading])
 
@@ -513,7 +532,7 @@ function App() {
       <div className="h-screen w-screen flex flex-col bg-white overflow-hidden">
         <div className="flex-1 overflow-y-auto">
           <Routes>
-            <Route path="/info/:slug" element={<LazyRouteFallback><InfoPage /></LazyRouteFallback>} />
+            <Route path="/info/:slug" element={<LazyRouteFallback screen="info"><InfoPage /></LazyRouteFallback>} />
             <Route
               path="/"
               element={
@@ -526,7 +545,7 @@ function App() {
               path="/progress"
               element={
                 user
-                  ? <LazyRouteFallback fallback={<ProgressSkeleton />}><ProgressScreen key={`progress-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} /></LazyRouteFallback>
+                  ? <LazyRouteFallback screen="progress" fallback={<ProgressSkeleton />}><ProgressScreen key={`progress-${appRecoveryKey}`} user={user} resumeSignal={resumeSignal} /></LazyRouteFallback>
                   : authRestorePending
                     ? <AuthRecoveryScreen />
                     : <Navigate to="/" />
@@ -536,7 +555,7 @@ function App() {
               path="/profile"
               element={
                 user
-                  ? <LazyRouteFallback><ProfileScreen user={user} /></LazyRouteFallback>
+                  ? <LazyRouteFallback screen="profile" fallback={<ProfileSkeleton />}><ProfileScreen user={user} /></LazyRouteFallback>
                   : authRestorePending
                     ? <AuthRecoveryScreen />
                     : <Navigate to="/" />
@@ -555,32 +574,48 @@ function App() {
 
 function AuthRecoveryScreen() {
   return (
-    <div className="h-full w-full flex items-center justify-center bg-white px-6">
-      <div className="text-center">
-        <div className="w-10 h-10 border-3 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-sm font-semibold text-gray-700">Restoring session...</p>
+    <div className="h-full w-full flex items-center justify-center bg-[#FFF9F2] px-6">
+      <div className="w-full max-w-sm rounded-[28px] border border-[rgba(21,26,34,0.08)] bg-white/90 p-6 text-center shadow-[0_18px_50px_rgba(21,26,34,0.08)]">
+        <div className="mx-auto mb-4 h-12 w-12 rounded-full border-4 border-[#E7D9C2] border-t-[#151A22] motion-safe:animate-spin" />
+        <p className="text-sm font-black text-[#151A22]">Restoring session...</p>
+        <p className="mt-1 text-xs font-semibold text-[#6B7280]">Keeping your latest app state ready.</p>
       </div>
     </div>
   )
 }
 
-function LazyRouteFallback({ children, fallback = <ScreenSkeleton /> }) {
+function LazyRouteFallback({ children, fallback = <ScreenSkeleton />, screen = 'screen' }) {
   return (
-    <Suspense fallback={fallback}>
+    <Suspense fallback={<LoggedSuspenseFallback screen={screen} fallback={fallback} />}>
+      <LazyReadyMarker screen={screen} />
       {children}
     </Suspense>
   )
 }
 
-function runWhenIdle(task) {
-  if (typeof window === 'undefined') return
+function LoggedSuspenseFallback({ screen, fallback }) {
+  useEffect(() => {
+    logAppEvent('LAZY_ROUTE_FALLBACK_RENDERED', {
+      level: 'info',
+      screen,
+      operation: 'lazy route fallback'
+    })
+  }, [screen])
 
-  if ('requestIdleCallback' in window) {
-    window.requestIdleCallback(task, { timeout: 2500 })
-    return
-  }
+  return fallback
+}
 
-  window.setTimeout(task, 1200)
+function LazyReadyMarker({ screen }) {
+  useEffect(() => {
+    logAppEvent('LAZY_MODULE_LOADED', {
+      level: 'info',
+      screen,
+      operation: 'lazy route rendered',
+      metadata: { route: screen }
+    })
+  }, [screen])
+
+  return null
 }
 
 export default App
