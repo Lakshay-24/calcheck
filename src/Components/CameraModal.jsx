@@ -171,7 +171,7 @@ export default function CameraModal({
     try {
       setError(null)
       setRequestNotice(null)
-      setFlowStatus('Preparing photo...')
+      setFlowStatus(isLargeImageSource(imageSource) ? 'Large photo detected. Optimizing for your device...' : 'Preparing photo...')
       setStage('preparing')
       console.info('[CalCheck] CAMERA_OK_TAPPED', { source: sourceLabel })
       console.info('[CalCheck] IMAGE_COMPRESSION_START', { source: sourceLabel })
@@ -195,6 +195,14 @@ export default function CameraModal({
       }
 
       uploadImageRef.current = preparedImage
+      if (isBlobLikeSource(imageSource) && imageSource !== preparedImage.blob) {
+        logAppEvent('IMAGE_ORIGINAL_FILE_RELEASED', {
+          level: 'info',
+          screen: 'scan',
+          operation: 'prepare image payload',
+          metadata: getImageFailureMetadata(imageSource, sourceLabel, 'release')
+        })
+      }
       retryImageSourceRef.current = preparedImage.blob
       setPreviewUrl(preparedImage.previewUrl)
       console.info('[CalCheck] IMAGE_COMPRESSION_SUCCESS', {
@@ -264,7 +272,7 @@ export default function CameraModal({
       const failedDuringCompression = currentPhase === 'photo-compression'
       const lowMemoryFallback = failedDuringCompression && isLikelyLowMemoryImageError(err)
       const message = lowMemoryFallback
-        ? 'This photo was too large to process. Try a smaller photo or retake it.'
+        ? 'This photo is too large for your device. Try retaking it or choose a smaller photo.'
         : getErrorMessage(err, "Couldn't analyze this meal. Please try again.")
       const timeoutStage = message.includes('took too long') ? 'photo-compression' : 'analysis'
       logSafeError(failedDuringCompression ? 'IMAGE_COMPRESSION_FAILED' : 'ANALYZE_FOOD_FAILED', err, {
@@ -557,6 +565,14 @@ const withTimeout = (promise, ms, message) => {
   })
 }
 
+const isBlobLikeSource = (source) => {
+  return (typeof File !== 'undefined' && source instanceof File) ||
+    (typeof Blob !== 'undefined' && source instanceof Blob)
+}
+
+const isLargeImageSource = (source) => {
+  return isBlobLikeSource(source) && Number(source.size) > 6 * 1024 * 1024
+}
 const isLikelyLowMemoryImageError = (error) => {
   const message = String(error?.message || error || '').toLowerCase()
   return (
