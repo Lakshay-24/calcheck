@@ -352,26 +352,40 @@ export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }
 
   const persistMeal = async (mealResult) => {
     const source = mealResult?.source === 'voice_transcript' ? 'voice_transcript' : 'text'
+    const mealToSave = { ...mealResult, source }
     try {
       setIsSaving(true)
       setError(null)
 
-      if (!user) {
-        storePendingMeal({ ...mealResult, source })
+      if (!user?.id) {
+        storePendingMeal(mealToSave)
         await signInWithGoogle()
         return
       }
 
+      logAppEvent('TEXT_MEAL_SAVE_STARTED', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'save text meal',
+        metadata: { source, has_user_id: true }
+      })
+
       const savedMeal = await trackApiRequest('save text meal flow', async () => {
         await getOrCreateUserProfile(user.id, user.email)
-        return saveMealLog(user.id, mealResult, { source })
+        return saveMealLog(user.id, mealToSave, { source })
+      })
+      logAppEvent('TEXT_MEAL_SAVE_SUCCESS', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'save text meal',
+        metadata: { source, meal_id: savedMeal?.id || null }
       })
       emitMealSaved(savedMeal)
       onMealSaved?.(savedMeal)
       closeModal()
     } catch (err) {
       setError("Couldn't save meal. Please try again.")
-      logSafeError('SAVE_MEAL_FAILED', err, { screen: 'scan', operation: 'save text meal' })
+      logSafeError('TEXT_MEAL_SAVE_FAILED', err, { screen: 'scan', operation: 'save text meal', metadata: { source } })
     } finally {
       setIsSaving(false)
     }

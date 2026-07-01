@@ -349,14 +349,13 @@ export default function ScanScreen({ user, resumeSignal = 0, authStatus = user ?
     }
 
     if (!scanAccessReady) {
-      logAppEvent('CAMERA_PICKER_BLOCKED_ACCESS_PENDING', {
-        level: 'warn',
+      logAppEvent('CAMERA_PICKER_OPENED_WITH_PENDING_ACCESS_METADATA', {
+        level: 'info',
         screen: 'scan',
         operation: 'check scan access',
         metadata: { source, reason: 'access-not-ready' }
       })
       refreshScanAccess(source)
-      return
     }
 
     if (!pro && lifetimeScans >= FREE_SCAN_LIMIT) {

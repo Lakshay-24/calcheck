@@ -102,6 +102,14 @@ export function MealDataProvider({ children }) {
           return latest
         }
 
+        if (reason === 'meal-saved' && Array.isArray(latest?.data) && latest.data.length > data.length) {
+          logAppEvent('MEAL_SAVE_REFETCH_MERGED_WITH_OPTIMISTIC_CACHE', {
+            level: 'info',
+            operation: 'meal save forced refetch',
+            metadata: { key, requestVersion, previous_count: latest.data.length, fetched_count: data.length }
+          })
+        }
+
         dispatch({ type: 'QUERY_SUCCESS', key, requestVersion, data, reason })
         console.info('[CalCheck] MEAL_CACHE_UPDATED', {
           key,
@@ -451,9 +459,12 @@ function reducer(state, action) {
     case 'QUERY_SUCCESS': {
       const previous = getQuery(state, action.key)
       if (previous.requestVersion !== action.requestVersion) return state
+      const nextData = action.reason === 'meal-saved'
+        ? mergeMealLists(previous.data || [], action.data || [])
+        : action.data
       const nextQuery = {
         ...previous,
-        data: action.data,
+        data: nextData,
         status: STATUS.READY,
         error: null,
         lastSuccessfulAt: new Date().toISOString(),
@@ -542,7 +553,27 @@ function hasQueryData(query) {
 function mergeMeal(mealLogs, savedMeal) {
   const existing = Array.isArray(mealLogs) ? mealLogs : []
   const withoutSavedMeal = existing.filter((meal) => meal.id !== savedMeal.id)
-  return [savedMeal, ...withoutSavedMeal].sort((a, b) =>
+  return sortMealsNewestFirst([savedMeal, ...withoutSavedMeal])
+}
+
+function mergeMealLists(existingMeals, fetchedMeals) {
+  const mergedById = new Map()
+  const fetched = Array.isArray(fetchedMeals) ? fetchedMeals : []
+  const existing = Array.isArray(existingMeals) ? existingMeals : []
+
+  fetched.forEach((meal) => {
+    if (meal?.id) mergedById.set(meal.id, meal)
+  })
+
+  existing.forEach((meal) => {
+    if (meal?.id && !mergedById.has(meal.id)) mergedById.set(meal.id, meal)
+  })
+
+  return sortMealsNewestFirst(Array.from(mergedById.values()))
+}
+
+function sortMealsNewestFirst(meals) {
+  return meals.sort((a, b) =>
     parseDatabaseTimestamp(b.timestamp).getTime() - parseDatabaseTimestamp(a.timestamp).getTime()
   )
 }
