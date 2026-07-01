@@ -1,7 +1,10 @@
-import React, { useMemo, useState } from 'react'
-import { ImageIcon, Loader2, Share2, X } from 'lucide-react'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Check, Edit3, ImageIcon, Loader2, Share2, Trash2, X } from 'lucide-react'
 import { formatLocalTime, getUserTimezone, parseDatabaseTimestamp } from '../utils/timezone'
 import { getErrorMessage, logSafeError } from '../utils/errorUtils'
+import { deleteMealLog, submitMealFeedback, updateMealLog } from '../services/database'
+import { emitMealDeleted, emitMealUpdated } from '../utils/mealEvents'
+import { logAppEvent } from '../utils/appDiagnostics'
 
 export function MealCard({ meal, timezone = getUserTimezone(), onClick, compact = false }) {
   const imageSrc = getMealImageSrc(meal)
@@ -35,25 +38,57 @@ export function MealCard({ meal, timezone = getUserTimezone(), onClick, compact 
 }
 
 export function MealDetailSheet({ meal, user, timezone = getUserTimezone(), onClose }) {
+  const [currentMeal, setCurrentMeal] = useState(meal)
   const [shareState, setShareState] = useState({ loading: false, error: null, notice: null })
+  const [editOpen, setEditOpen] = useState(false)
+  const [editSaving, setEditSaving] = useState(false)
+  const [deleteSaving, setDeleteSaving] = useState(false)
+  const [actionError, setActionError] = useState(null)
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false)
+  const [form, setForm] = useState(() => buildMealEditForm(meal))
   const username = getShareUsername(user)
-  const shareText = useMemo(() => getMealShareText(meal), [meal])
+  const shareText = useMemo(() => getMealShareText(currentMeal), [currentMeal])
 
-  if (!meal) return null
+  useEffect(() => {
+    setCurrentMeal(meal)
+    setForm(buildMealEditForm(meal))
+    setEditOpen(false)
+    setActionError(null)
+    setShareState({ loading: false, error: null, notice: null })
 
-  const imageSrc = getMealImageSrc(meal)
+    if (!meal?.id || typeof window === 'undefined') {
+      setFeedbackSubmitted(true)
+      return
+    }
+
+    const dismissed = window.localStorage.getItem(getFeedbackStorageKey(meal.id)) === '1'
+    setFeedbackSubmitted(dismissed)
+    if (!dismissed) {
+      logAppEvent('MEAL_FEEDBACK_SHOWN', {
+        level: 'info',
+        screen: 'meal_detail',
+        operation: 'meal feedback prompt',
+        metadata: { meal_id_present: true, source: meal.source || 'unknown' }
+      })
+    }
+  }, [meal])
+
+  if (!currentMeal) return null
+
+  const imageSrc = getMealImageSrc(currentMeal)
+  const canMutate = Boolean(user?.id && currentMeal?.id)
 
   const handleShare = async () => {
     setShareState({ loading: true, error: null, notice: null })
 
     try {
-      const blob = await generateMealShareCard(meal, { imageSrc, username })
+      const blob = await generateMealShareCard(currentMeal, { imageSrc, username })
       const file = new File([blob], 'calcheck-meal.png', { type: 'image/png' })
 
       if (navigator.share && navigator.canShare?.({ files: [file] })) {
         await navigator.share({
           files: [file],
-          title: meal.food_name || 'CalCheck meal',
+          title: currentMeal.food_name || 'CalCheck meal',
           text: shareText
         })
         setShareState({ loading: false, error: null, notice: 'Shared' })
@@ -62,7 +97,7 @@ export function MealDetailSheet({ meal, user, timezone = getUserTimezone(), onCl
 
       if (navigator.share) {
         await navigator.share({
-          title: meal.food_name || 'CalCheck meal',
+          title: currentMeal.food_name || 'CalCheck meal',
           text: shareText,
           url: 'https://calcheck.app'
         })
@@ -86,20 +121,143 @@ export function MealDetailSheet({ meal, user, timezone = getUserTimezone(), onCl
     }
   }
 
+  const handleOpenEdit = () => {
+    setForm(buildMealEditForm(currentMeal))
+    setActionError(null)
+    setEditOpen(true)
+    logAppEvent('MEAL_EDIT_OPENED', {
+      level: 'info',
+      screen: 'meal_detail',
+      operation: 'open meal edit',
+      metadata: { meal_id_present: true, source: currentMeal.source || 'unknown' }
+    })
+  }
+
+  const handleSaveEdit = async () => {
+    if (!canMutate) return
+    const updatePayload = buildMealEditPayload(form)
+    const changedFields = getChangedFields(currentMeal, updatePayload)
+    if (changedFields.length === 0) {
+      setEditOpen(false)
+      return
+    }
+
+    setEditSaving(true)
+    setActionError(null)
+    try {
+      const updatedMeal = await updateMealLog(user.id, currentMeal.id, updatePayload)
+      await submitMealFeedback(user.id, {
+        meal_log_id: currentMeal.id,
+        source: currentMeal.source || 'unknown',
+        feedback_type: 'corrected',
+        original_snapshot: currentMeal,
+        corrected_snapshot: updatedMeal,
+        screen: 'meal_detail'
+      })
+      markFeedbackSubmitted(currentMeal.id)
+      setFeedbackSubmitted(true)
+      setCurrentMeal(updatedMeal)
+      setForm(buildMealEditForm(updatedMeal))
+      setEditOpen(false)
+      emitMealUpdated(updatedMeal)
+      logAppEvent('MEAL_EDIT_SAVED', {
+        level: 'info',
+        screen: 'meal_detail',
+        operation: 'save meal edit',
+        metadata: { meal_id_present: true, source: updatedMeal.source || 'unknown', changed_fields: changedFields }
+      })
+    } catch (error) {
+      setActionError('Could not update this meal. Please try again.')
+      logSafeError('MEAL_EDIT_FAILED', error, {
+        screen: 'meal_detail',
+        operation: 'save meal edit',
+        metadata: { meal_id_present: true, source: currentMeal.source || 'unknown', changed_fields: changedFields }
+      })
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!canMutate || deleteSaving) return
+    logAppEvent('MEAL_DELETE_REQUESTED', {
+      level: 'info',
+      screen: 'meal_detail',
+      operation: 'request meal delete',
+      metadata: { meal_id_present: true, source: currentMeal.source || 'unknown' }
+    })
+
+    if (!window.confirm('Delete this meal?')) return
+
+    setDeleteSaving(true)
+    setActionError(null)
+    logAppEvent('MEAL_DELETE_CONFIRMED', {
+      level: 'info',
+      screen: 'meal_detail',
+      operation: 'confirm meal delete',
+      metadata: { meal_id_present: true, source: currentMeal.source || 'unknown' }
+    })
+
+    try {
+      await submitMealFeedback(user.id, {
+        meal_log_id: currentMeal.id,
+        source: currentMeal.source || 'unknown',
+        feedback_type: 'deleted',
+        original_snapshot: currentMeal,
+        screen: 'meal_detail'
+      })
+      const deletedMeal = await deleteMealLog(user.id, currentMeal.id)
+      markFeedbackSubmitted(currentMeal.id)
+      emitMealDeleted(deletedMeal || currentMeal)
+      onClose?.()
+    } catch (error) {
+      setActionError('Could not delete this meal. Please try again.')
+      logSafeError('MEAL_DELETE_FAILED', error, {
+        screen: 'meal_detail',
+        operation: 'delete meal',
+        metadata: { meal_id_present: true, source: currentMeal.source || 'unknown' }
+      })
+    } finally {
+      setDeleteSaving(false)
+    }
+  }
+
+  const handleConfirmFeedback = async () => {
+    if (!canMutate || feedbackSubmitted) return
+    try {
+      await submitMealFeedback(user.id, {
+        meal_log_id: currentMeal.id,
+        source: currentMeal.source || 'unknown',
+        feedback_type: 'confirmed',
+        original_snapshot: currentMeal,
+        screen: 'meal_detail'
+      })
+      markFeedbackSubmitted(currentMeal.id)
+      setFeedbackSubmitted(true)
+    } catch (error) {
+      logSafeError('MEAL_FEEDBACK_FAILED', error, {
+        screen: 'meal_detail',
+        operation: 'confirm meal feedback',
+        metadata: { meal_id_present: true, source: currentMeal.source || 'unknown', feedback_type: 'confirmed' }
+      })
+    }
+  }
+
+  const handleFixFeedback = () => {
+    markFeedbackSubmitted(currentMeal.id)
+    setFeedbackSubmitted(true)
+    handleOpenEdit()
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center sm:justify-center">
       <div className="w-full sm:max-w-md max-h-[92vh] overflow-y-auto bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl">
         <div className="sticky top-0 bg-white/95 backdrop-blur border-b border-gray-100 px-5 py-4 flex items-center justify-between z-10">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase text-gray-400">Meal details</p>
-            <h2 className="text-lg font-bold text-gray-900 truncate">{meal.food_name || 'Saved meal'}</h2>
+            <h2 className="text-lg font-bold text-gray-900 truncate">{currentMeal.food_name || 'Saved meal'}</h2>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-full hover:bg-gray-100"
-            aria-label="Close meal details"
-          >
+          <button type="button" onClick={onClose} className="p-2 rounded-full hover:bg-gray-100" aria-label="Close meal details">
             <X size={20} />
           </button>
         </div>
@@ -107,45 +265,200 @@ export function MealDetailSheet({ meal, user, timezone = getUserTimezone(), onCl
         <div className="p-5 space-y-5">
           <MealImage src={imageSrc} className="w-full aspect-[4/3]" large />
 
-          <div className="grid grid-cols-2 gap-3">
-            <MetricCard label="Calories" value={`${formatNumber(meal.calories)} kcal`} />
-            <MetricCard label="Protein" value={`${formatNumber(meal.protein)}g`} />
-            <MetricCard label="Carbs" value={meal.carbs != null ? `${formatNumber(meal.carbs)}g` : 'N/A'} />
-            <MetricCard label="Fat" value={meal.fat != null ? `${formatNumber(meal.fat)}g` : 'N/A'} />
-          </div>
+          {!feedbackSubmitted && canMutate && !editOpen && (
+            <div className="rounded-2xl border border-brand-300/60 bg-brand-50/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-gray-900">Looks right?</p>
+                  <p className="mt-1 text-xs text-gray-500">A quick check helps CalCheck learn from corrections.</p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button type="button" onClick={handleConfirmFeedback} className="rounded-full bg-white px-3 py-2 text-xs font-bold text-gray-800 shadow-sm">Looks good</button>
+                  <button type="button" onClick={handleFixFeedback} className="rounded-full bg-gray-900 px-3 py-2 text-xs font-bold text-white">Fix result</button>
+                </div>
+              </div>
+            </div>
+          )}
 
-          <div className="rounded-2xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
-            <DetailRow label="Portion" value={meal.portion_size} />
-            <DetailRow label="Estimated grams" value={meal.estimated_grams ? `~${Math.round(meal.estimated_grams)}g` : null} />
-            <DetailRow label="Confidence" value={meal.confidence != null ? `${Math.round(meal.confidence * 100)}%` : null} />
-            <DetailRow label="Source" value={getMealSource(meal)} />
-            <DetailRow label="Saved" value={formatMealDateTime(meal, timezone)} />
-          </div>
+          {editOpen ? (
+            <MealEditForm form={form} setForm={setForm} saving={editSaving} onCancel={() => setEditOpen(false)} onSave={handleSaveEdit} />
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <MetricCard label="Calories" value={`${formatNumber(currentMeal.calories)} kcal`} />
+                <MetricCard label="Protein" value={`${formatNumber(currentMeal.protein)}g`} />
+                <MetricCard label="Carbs" value={currentMeal.carbs != null ? `${formatNumber(currentMeal.carbs)}g` : 'N/A'} />
+                <MetricCard label="Fat" value={currentMeal.fat != null ? `${formatNumber(currentMeal.fat)}g` : 'N/A'} />
+              </div>
+
+              <div className="rounded-2xl border border-gray-200 divide-y divide-gray-100 overflow-hidden">
+                <DetailRow label="Portion" value={currentMeal.portion_size} />
+                <DetailRow label="Estimated grams" value={currentMeal.estimated_grams ? `~${Math.round(currentMeal.estimated_grams)}g` : null} />
+                <DetailRow label="Confidence" value={currentMeal.confidence ? `${Math.round(currentMeal.confidence * 100)}%` : null} />
+                <DetailRow label="Source" value={getMealSource(currentMeal)} />
+                <DetailRow label="Saved" value={formatMealDateTime(currentMeal, timezone)} />
+              </div>
+            </>
+          )}
+
+          {actionError && <p className="text-center text-xs font-semibold text-red-600">{actionError}</p>}
 
           <div className="space-y-2">
-            <button
-              type="button"
-              onClick={handleShare}
-              disabled={shareState.loading}
-              className="w-full bg-gray-900 text-white rounded-2xl py-3 font-semibold flex items-center justify-center gap-2 disabled:opacity-70"
-            >
-              {shareState.loading ? <Loader2 size={18} className="animate-spin" /> : <Share2 size={18} />}
-              <span>{shareState.loading ? 'Creating card...' : 'Share'}</span>
-            </button>
-            {shareState.notice && (
-              <p className="text-center text-xs font-semibold text-brand-700">{shareState.notice}</p>
+            {!editOpen && canMutate && (
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={handleOpenEdit} className="rounded-2xl border border-gray-200 bg-white py-3 font-semibold text-gray-900 flex items-center justify-center gap-2">
+                  <Edit3 size={17} />
+                  <span>Edit</span>
+                </button>
+                <button type="button" onClick={handleDelete} disabled={deleteSaving} className="rounded-2xl border border-red-100 bg-red-50 py-3 font-semibold text-red-700 flex items-center justify-center gap-2 disabled:opacity-70">
+                  {deleteSaving ? <Loader2 size={17} className="animate-spin" /> : <Trash2 size={17} />}
+                  <span>{deleteSaving ? 'Deleting...' : 'Delete'}</span>
+                </button>
+              </div>
             )}
-            {shareState.error && (
-              <p className="text-center text-xs font-semibold text-red-600">{shareState.error}</p>
+
+            {!editOpen && (
+              <button type="button" onClick={handleShare} disabled={shareState.loading} className="w-full bg-gray-900 text-white rounded-2xl py-3 font-semibold flex items-center justify-center gap-2 disabled:opacity-70">
+                {shareState.loading ? <Loader2 size={18} className="animate-spin" /> : <Share2 size={18} />}
+                <span>{shareState.loading ? 'Creating card...' : 'Share'}</span>
+              </button>
             )}
-            <p className="text-center text-xs text-gray-400">Share card includes CalCheck branding.</p>
+            {shareState.notice && <p className="text-center text-xs font-semibold text-brand-700">{shareState.notice}</p>}
+            {shareState.error && <p className="text-center text-xs font-semibold text-red-600">{shareState.error}</p>}
+            {!editOpen && <p className="text-center text-xs text-gray-400">Share card includes CalCheck branding.</p>}
           </div>
         </div>
       </div>
     </div>
   )
 }
+function MealEditForm({ form, setForm, saving, onCancel, onSave }) {
+  const updateField = (field, value) => setForm((current) => ({ ...current, [field]: value }))
 
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-4">
+      <div>
+        <label className="text-xs font-bold uppercase text-gray-500" htmlFor="meal-edit-name">Meal name</label>
+        <input
+          id="meal-edit-name"
+          value={form.food_name}
+          onChange={(event) => updateField('food_name', event.target.value)}
+          className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-3 text-sm font-semibold text-gray-900"
+          maxLength={160}
+        />
+      </div>
+
+      <div>
+        <label className="text-xs font-bold uppercase text-gray-500" htmlFor="meal-edit-portion">Portion</label>
+        <input
+          id="meal-edit-portion"
+          value={form.portion_size}
+          onChange={(event) => updateField('portion_size', event.target.value)}
+          className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-3 text-sm font-semibold text-gray-900"
+          maxLength={80}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <NumberField label="Calories" value={form.calories} onChange={(value) => updateField('calories', value)} suffix="kcal" />
+        <NumberField label="Protein" value={form.protein} onChange={(value) => updateField('protein', value)} suffix="g" />
+        <NumberField label="Carbs" value={form.carbs} onChange={(value) => updateField('carbs', value)} suffix="g" />
+        <NumberField label="Fat" value={form.fat} onChange={(value) => updateField('fat', value)} suffix="g" />
+      </div>
+
+      <NumberField label="Estimated grams" value={form.estimated_grams} onChange={(value) => updateField('estimated_grams', value)} suffix="g" optional />
+
+      <div className="grid grid-cols-2 gap-2 pt-2">
+        <button type="button" onClick={onCancel} disabled={saving} className="rounded-2xl border border-gray-200 bg-white py-3 font-semibold text-gray-700 disabled:opacity-70">
+          Cancel
+        </button>
+        <button type="button" onClick={onSave} disabled={saving} className="rounded-2xl bg-gray-900 py-3 font-semibold text-white flex items-center justify-center gap-2 disabled:opacity-70">
+          {saving ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
+          <span>{saving ? 'Saving...' : 'Save'}</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function NumberField({ label, value, onChange, suffix, optional = false }) {
+  return (
+    <label className="block">
+      <span className="text-xs font-bold uppercase text-gray-500">{label}</span>
+      <div className="mt-1 flex items-center rounded-xl border border-gray-200 bg-white px-3 py-2">
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          inputMode="decimal"
+          type="number"
+          min="0"
+          step="any"
+          placeholder={optional ? 'Optional' : '0'}
+          className="min-w-0 flex-1 bg-transparent py-1 text-sm font-semibold text-gray-900 outline-none"
+        />
+        {suffix && <span className="ml-2 text-xs font-bold text-gray-400">{suffix}</span>}
+      </div>
+    </label>
+  )
+}
+
+function buildMealEditForm(meal) {
+  return {
+    food_name: meal?.food_name || '',
+    portion_size: meal?.portion_size || '',
+    calories: valueToInput(meal?.calories),
+    protein: valueToInput(meal?.protein),
+    carbs: valueToInput(meal?.carbs),
+    fat: valueToInput(meal?.fat),
+    estimated_grams: valueToInput(meal?.estimated_grams)
+  }
+}
+
+function buildMealEditPayload(form) {
+  return {
+    food_name: form.food_name,
+    portion_size: form.portion_size,
+    calories: form.calories,
+    protein: form.protein,
+    carbs: form.carbs,
+    fat: form.fat,
+    estimated_grams: form.estimated_grams
+  }
+}
+
+function getChangedFields(meal, payload) {
+  return Object.entries(payload).reduce((fields, [field, value]) => {
+    const current = field === 'estimated_grams' ? meal?.[field] : normalizeComparableValue(meal?.[field])
+    const next = field === 'estimated_grams' ? normalizeOptionalNumber(value) : normalizeComparableValue(value)
+    if (String(current ?? '') !== String(next ?? '')) fields.push(field)
+    return fields
+  }, [])
+}
+
+function valueToInput(value) {
+  return value == null || value === '' ? '' : String(value)
+}
+
+function normalizeComparableValue(value) {
+  if (value == null || value === '') return ''
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? Math.round(numberValue) : String(value).trim()
+}
+
+function normalizeOptionalNumber(value) {
+  if (value == null || value === '') return ''
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : String(value).trim()
+}
+
+function getFeedbackStorageKey(mealId) {
+  return `calcheck-meal-feedback:${mealId}`
+}
+
+function markFeedbackSubmitted(mealId) {
+  if (!mealId || typeof window === 'undefined') return
+  window.localStorage.setItem(getFeedbackStorageKey(mealId), '1')
+}
 function MetricCard({ label, value }) {
   return (
     <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4">

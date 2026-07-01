@@ -3,7 +3,7 @@ import { calculateDailyTotals, getMealLogsForLocalDateRange, getMealLogsToday } 
 import { logAppEvent } from '../utils/appDiagnostics'
 import { getErrorMessage, isAbortError } from '../utils/errorUtils'
 import { getLocalDate, getUserTimezone, parseDatabaseTimestamp } from '../utils/timezone'
-import { onMealSaved } from '../utils/mealEvents'
+import { onMealDeleted, onMealSaved, onMealUpdated } from '../utils/mealEvents'
 
 const STATUS = {
   IDLE: 'idle',
@@ -22,7 +22,8 @@ const MealDataContext = createContext(null)
 
 const initialState = {
   queries: {},
-  activeQueries: {}
+  activeQueries: {},
+  deletedMealIds: {}
 }
 
 export function MealDataProvider({ children }) {
@@ -294,6 +295,24 @@ export function MealDataProvider({ children }) {
     mergeSavedMealIntoCache(savedMeal, 'meal-saved-event')
   }), [mergeSavedMealIntoCache])
 
+  useEffect(() => onMealUpdated((updatedMeal) => {
+    if (!updatedMeal) return
+    mergeSavedMealIntoCache(updatedMeal, 'meal-updated')
+  }), [mergeSavedMealIntoCache])
+
+  useEffect(() => onMealDeleted((deletedMeal) => {
+    if (!deletedMeal?.id) return
+    console.info('[CalCheck] MEAL_CACHE_INVALIDATED_AFTER_DELETE', {
+      meal_id: deletedMeal.id,
+      local_date: deletedMeal.local_date || null
+    })
+    logAppEvent('MEAL_CACHE_INVALIDATED_AFTER_DELETE', {
+      level: 'info',
+      operation: 'meal delete invalidation',
+      metadata: { meal_id: deletedMeal.id, local_date: deletedMeal.local_date || null }
+    })
+    dispatch({ type: 'REMOVE_MEAL', meal: deletedMeal, reason: 'meal-deleted' })
+  }), [])
   const invalidateMeals = useCallback((reason = 'manual') => {
     console.info('[CalCheck] MEAL_CACHE_INVALIDATED', { reason })
     logAppEvent('MEAL_CACHE_INVALIDATED', {
@@ -459,9 +478,12 @@ function reducer(state, action) {
     case 'QUERY_SUCCESS': {
       const previous = getQuery(state, action.key)
       if (previous.requestVersion !== action.requestVersion) return state
+      const fetchedData = filterDeletedMeals(action.data, state.deletedMealIds)
       const nextData = action.reason === 'meal-saved'
-        ? mergeMealLists(previous.data || [], action.data || [])
-        : action.data
+        ? mergeMealLists(previous.data || [], fetchedData || [])
+        : action.reason === 'meal-updated'
+          ? mergeMealLists(previous.data || [], fetchedData || [], { preferExisting: true })
+          : fetchedData
       const nextQuery = {
         ...previous,
         data: nextData,
@@ -501,6 +523,34 @@ function reducer(state, action) {
       }
       logStateChanged(action.key, previous, nextQuery, action.reason)
       return setQuery(state, action.key, nextQuery)
+    }
+    case 'REMOVE_MEAL': {
+      const mealId = action.meal?.id
+      if (!mealId) return state
+      const queries = Object.entries(state.queries).reduce((next, [key, query]) => {
+        const nextData = Array.isArray(query.data)
+          ? query.data.filter((meal) => meal.id !== mealId)
+          : []
+        const nextQuery = {
+          ...query,
+          data: nextData,
+          status: STATUS.READY,
+          error: null,
+          isStale: true
+        }
+        logStateChanged(key, query, nextQuery, action.reason)
+        next[key] = nextQuery
+        return next
+      }, {})
+
+      return {
+        ...state,
+        queries,
+        deletedMealIds: {
+          ...state.deletedMealIds,
+          [mealId]: Date.now()
+        }
+      }
     }
     case 'MARK_ALL_STALE': {
       const queries = Object.entries(state.queries).reduce((next, [key, query]) => {
@@ -556,7 +606,7 @@ function mergeMeal(mealLogs, savedMeal) {
   return sortMealsNewestFirst([savedMeal, ...withoutSavedMeal])
 }
 
-function mergeMealLists(existingMeals, fetchedMeals) {
+function mergeMealLists(existingMeals, fetchedMeals, options = {}) {
   const mergedById = new Map()
   const fetched = Array.isArray(fetchedMeals) ? fetchedMeals : []
   const existing = Array.isArray(existingMeals) ? existingMeals : []
@@ -566,7 +616,8 @@ function mergeMealLists(existingMeals, fetchedMeals) {
   })
 
   existing.forEach((meal) => {
-    if (meal?.id && !mergedById.has(meal.id)) mergedById.set(meal.id, meal)
+    if (!meal?.id) return
+    if (options.preferExisting || !mergedById.has(meal.id)) mergedById.set(meal.id, meal)
   })
 
   return sortMealsNewestFirst(Array.from(mergedById.values()))
@@ -576,6 +627,11 @@ function sortMealsNewestFirst(meals) {
   return meals.sort((a, b) =>
     parseDatabaseTimestamp(b.timestamp).getTime() - parseDatabaseTimestamp(a.timestamp).getTime()
   )
+}
+
+function filterDeletedMeals(meals, deletedMealIds = {}) {
+  if (!Array.isArray(meals)) return []
+  return meals.filter((meal) => meal?.id && !deletedMealIds[meal.id])
 }
 
 function shouldMergeMealIntoQuery(savedMeal, mealLocalDate, details) {

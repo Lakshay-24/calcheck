@@ -58,6 +58,10 @@ const MEAL_LOG_INTEGER_FIELDS = new Set([
   'image_height',
   'image_size_bytes'
 ])
+
+const MEAL_FEEDBACK_COLUMNS = 'id,user_id,meal_log_id,source,feedback_type,original_snapshot,corrected_snapshot,created_at'
+const EDITABLE_MEAL_FIELDS = new Set(['food_name', 'portion_size', 'estimated_grams', 'calories', 'protein', 'carbs', 'fat'])
+const SAFE_FEEDBACK_FIELDS = ['food_name', 'calories', 'protein', 'carbs', 'fat', 'portion_size', 'source', 'confidence']
 const USER_PROFILE_COLUMNS = [
   'id',
   'created_at',
@@ -206,6 +210,75 @@ const toNullableInteger = (value) => {
   if (value == null || value === '') return null
   const numberValue = Number(value)
   return Number.isFinite(numberValue) ? Math.round(numberValue) : null
+}
+
+const toNumberOrNull = (value) => {
+  if (value == null || value === '') return null
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : null
+}
+
+const buildMealUpdatePayload = (updates, userId) => {
+  const payload = {}
+
+  Object.entries(updates || {}).forEach(([field, value]) => {
+    if (!EDITABLE_MEAL_FIELDS.has(field)) return
+
+    if (field === 'food_name') {
+      const name = String(value || '').trim()
+      if (name) payload.food_name = name.slice(0, 160)
+      return
+    }
+
+    if (field === 'portion_size') {
+      const portion = String(value || '').trim()
+      payload.portion_size = portion ? portion.slice(0, 80) : null
+      return
+    }
+
+    if (MEAL_LOG_INTEGER_FIELDS.has(field)) {
+      const rounded = toNullableInteger(value)
+      if (rounded !== null && Number(value) !== rounded) {
+        logSchemaTypeMismatch(userId, field, value, 'integer')
+      }
+      payload[field] = rounded
+      return
+    }
+
+    if (field === 'estimated_grams') {
+      payload.estimated_grams = toNumberOrNull(value)
+    }
+  })
+
+  return payload
+}
+
+const sanitizeMealFeedbackSnapshot = (meal) => {
+  if (!meal || typeof meal !== 'object') return null
+
+  return SAFE_FEEDBACK_FIELDS.reduce((snapshot, field) => {
+    const value = meal[field]
+    if (value == null || value === '') return snapshot
+
+    if (field === 'food_name' || field === 'portion_size' || field === 'source') {
+      snapshot[field === 'portion_size' ? 'portion' : field] = String(value).slice(0, 160)
+      return snapshot
+    }
+
+    const numberValue = Number(value)
+    if (Number.isFinite(numberValue)) snapshot[field] = numberValue
+    return snapshot
+  }, {})
+}
+
+const normalizeFeedbackType = (value) => {
+  const type = String(value || '').trim()
+  return ['confirmed', 'corrected', 'deleted', 'incorrect'].includes(type) ? type : 'corrected'
+}
+
+const normalizeFeedbackSource = (value) => {
+  const source = String(value || '').trim()
+  return ['photo', 'image', 'text', 'voice_transcript', 'unknown'].includes(source) ? source : 'unknown'
 }
 // Meal CRUD operations
 export const saveMealLog = async (userId, mealData, options = {}) => {
@@ -441,15 +514,103 @@ export const getMealLogsWeek = async (userId, timezone = getUserTimezone(), opti
   return data
 }
 
-export const deleteMealLog = async (mealId) => {
-  const { error } = await trackApiRequest('delete meal', () => supabase
-      .from('meal_logs')
-      .delete()
-      .eq('id', mealId))
+export const updateMealLog = async (userId, mealId, updates = {}) => {
+  const payload = buildMealUpdatePayload(updates, userId)
+  if (!userId || !mealId || Object.keys(payload).length === 0) {
+    throw new Error('No meal changes to save.')
+  }
 
-  if (error) throw error
+  const { data, error } = await trackApiRequest('update meal', () => supabase
+    .from('meal_logs')
+    .update(payload)
+    .eq('id', mealId)
+    .eq('user_id', userId)
+    .select(MEAL_LOG_COLUMNS)
+    .single())
+
+  if (error) {
+    logAppError('MEAL_EDIT_FAILED', error, {
+      user_id: userId,
+      screen: 'meal_detail',
+      operation: 'update meal',
+      metadata: { meal_id_present: Boolean(mealId), changed_fields: Object.keys(payload) }
+    })
+    throw error
+  }
+
+  logAppEvent('MEAL_EDIT_SAVED', {
+    user_id: userId,
+    level: 'info',
+    screen: 'meal_detail',
+    operation: 'update meal',
+    metadata: { meal_id_present: Boolean(data?.id), source: data?.source || null, changed_fields: Object.keys(payload) }
+  })
+
+  return data
 }
 
+export const deleteMealLog = async (userId, mealId) => {
+  if (!userId || !mealId) throw new Error('Meal not found.')
+
+  const { data, error } = await trackApiRequest('delete meal', () => supabase
+    .from('meal_logs')
+    .delete()
+    .eq('id', mealId)
+    .eq('user_id', userId)
+    .select(MEAL_LOG_COLUMNS)
+    .single())
+
+  if (error) {
+    logAppError('MEAL_DELETE_FAILED', error, {
+      user_id: userId,
+      screen: 'meal_detail',
+      operation: 'delete meal',
+      metadata: { meal_id_present: Boolean(mealId) }
+    })
+    throw error
+  }
+
+  return data
+}
+
+export const submitMealFeedback = async (userId, feedback = {}) => {
+  if (!userId) return null
+
+  const payload = {
+    user_id: userId,
+    meal_log_id: feedback.meal_log_id || null,
+    source: normalizeFeedbackSource(feedback.source),
+    feedback_type: normalizeFeedbackType(feedback.feedback_type),
+    original_snapshot: sanitizeMealFeedbackSnapshot(feedback.original_snapshot),
+    corrected_snapshot: sanitizeMealFeedbackSnapshot(feedback.corrected_snapshot)
+  }
+
+  const { data, error } = await trackApiRequest('meal feedback save', () => supabase
+    .from('meal_feedback')
+    .insert(payload)
+    .select(MEAL_FEEDBACK_COLUMNS)
+    .single())
+
+  if (error) {
+    logAppError('MEAL_FEEDBACK_FAILED', error, {
+      user_id: userId,
+      screen: feedback.screen || 'meal_detail',
+      operation: 'submit meal feedback',
+      metadata: { meal_id_present: Boolean(feedback.meal_log_id), feedback_type: payload.feedback_type, source: payload.source }
+    })
+    return null
+  }
+
+  logAppEvent('MEAL_FEEDBACK_SUBMITTED', {
+    user_id: userId,
+    level: 'info',
+    screen: feedback.screen || 'meal_detail',
+    operation: 'submit meal feedback',
+    metadata: { meal_id_present: Boolean(feedback.meal_log_id), feedback_type: payload.feedback_type, source: payload.source }
+  })
+
+  return data
+}
 // Calculate daily totals
 export const calculateDailyTotals = (mealLogs) => {
   return mealLogs.reduce((totals, meal) => ({

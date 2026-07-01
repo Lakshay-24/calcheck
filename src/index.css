@@ -14,6 +14,7 @@
   --color-text: 16 42 42;
   --color-text-muted: 91 111 110;
   --shadow-brand: 0 18px 45px rgba(17, 245, 246, 0.22);
+  --gradient-brand-logo: linear-gradient(135deg, rgb(var(--color-brand-mint)) 0%, rgb(var(--color-brand-core)) 48%, rgb(var(--color-brand-cyan)) 100%);
 }
 
 * {

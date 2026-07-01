@@ -1,4 +1,6 @@
 const MEAL_SAVED_EVENT = 'calcheck:meal-saved'
+const MEAL_UPDATED_EVENT = 'calcheck:meal-updated'
+const MEAL_DELETED_EVENT = 'calcheck:meal-deleted'
 
 export const emitMealSaved = (savedMeal) => {
   if (!savedMeal || typeof window === 'undefined') return
@@ -19,15 +21,43 @@ export const emitMealSaved = (savedMeal) => {
   window.dispatchEvent(new CustomEvent(MEAL_SAVED_EVENT, { detail: { meal: savedMeal } }))
 }
 
-export const onMealSaved = (callback) => {
+export const emitMealUpdated = (updatedMeal) => {
+  if (!updatedMeal || typeof window === 'undefined') return
+
+  console.info('[CalCheck] MEAL_UPDATED_REFRESH_EMITTED', {
+    id: updatedMeal.id || null,
+    local_date: updatedMeal.local_date || null,
+    meal_type: updatedMeal.meal_type || null
+  })
+
+  window.dispatchEvent(new CustomEvent(MEAL_UPDATED_EVENT, { detail: { meal: updatedMeal } }))
+}
+
+export const emitMealDeleted = (deletedMeal) => {
+  if (!deletedMeal?.id || typeof window === 'undefined') return
+
+  console.info('[CalCheck] MEAL_DELETED_REFRESH_EMITTED', {
+    id: deletedMeal.id,
+    local_date: deletedMeal.local_date || null,
+    meal_type: deletedMeal.meal_type || null
+  })
+
+  window.dispatchEvent(new CustomEvent(MEAL_DELETED_EVENT, { detail: { meal: deletedMeal } }))
+}
+
+export const onMealSaved = (callback) => subscribeMealEvent(MEAL_SAVED_EVENT, callback)
+export const onMealUpdated = (callback) => subscribeMealEvent(MEAL_UPDATED_EVENT, callback)
+export const onMealDeleted = (callback) => subscribeMealEvent(MEAL_DELETED_EVENT, callback)
+
+const subscribeMealEvent = (eventName, callback) => {
   if (typeof window === 'undefined') return () => {}
 
   const handler = (event) => {
     callback(event.detail?.meal || null)
   }
 
-  window.addEventListener(MEAL_SAVED_EVENT, handler)
-  console.info('[CalCheck] MEAL_EVENTS_LISTENER_ATTACHED', { event: MEAL_SAVED_EVENT })
+  window.addEventListener(eventName, handler)
+  console.info('[CalCheck] MEAL_EVENTS_LISTENER_ATTACHED', { event: eventName })
 
-  return () => window.removeEventListener(MEAL_SAVED_EVENT, handler)
+  return () => window.removeEventListener(eventName, handler)
 }
