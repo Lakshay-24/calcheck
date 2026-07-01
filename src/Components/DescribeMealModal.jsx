@@ -12,6 +12,11 @@ import { trackApiRequest } from '../services/diagnostics'
 const PENDING_MEAL_KEY = 'calcheck-pending-meal'
 const EMPTY_TEXT = ''
 const MAX_RECORDING_MS = 30000
+const RECORDER_MIME_CANDIDATES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/mp4'
+]
 
 export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }) {
   const [mode, setMode] = useState('type')
@@ -33,6 +38,12 @@ export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }
   useEffect(() => {
     if (!isOpen) cleanupVoice()
     if (isOpen) {
+      logAppEvent('DESCRIBE_MEAL_OPENED', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'describe meal opened',
+        metadata: getVoiceMetadata({ source: 'describe_meal' })
+      })
       setMode('type')
       setDescription(EMPTY_TEXT)
       setResult(null)
@@ -79,16 +90,43 @@ export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }
   }
 
   const startRecording = async () => {
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    logAppEvent('VOICE_RECORD_BUTTON_CLICKED', {
+      level: 'info',
+      screen: 'scan',
+      operation: 'voice meal record',
+      metadata: getVoiceMetadata({ source: 'voice' })
+    })
+
+    const MediaRecorderCtor = typeof window === 'undefined' ? null : window.MediaRecorder
+    if (!navigator.mediaDevices?.getUserMedia || !MediaRecorderCtor) {
       setError('Voice recording is not supported here. Use your keyboard mic or type your meal.')
+      logAppEvent('VOICE_RECORDER_UNSUPPORTED', {
+        level: 'warn',
+        screen: 'scan',
+        operation: 'voice meal record',
+        metadata: getVoiceMetadata({ source: 'voice', reason: 'missing-api' })
+      })
       return
     }
 
     try {
       setError(null)
       audioChunksRef.current = []
+      const recorderOptions = getSupportedRecorderOptions(MediaRecorderCtor)
+      logAppEvent('VOICE_MEDIARECORDER_MIME_SELECTED', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'voice meal record',
+        metadata: getVoiceMetadata({ mime_type: recorderOptions.mimeType || 'browser-default', source: 'voice' })
+      })
+      logAppEvent('VOICE_MIC_PERMISSION_REQUESTED', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'voice meal record',
+        metadata: getVoiceMetadata({ source: 'voice' })
+      })
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const recorder = new MediaRecorder(stream)
+      const recorder = new MediaRecorderCtor(stream, recorderOptions)
       mediaStreamRef.current = stream
       mediaRecorderRef.current = recorder
       recordingStartedAtRef.current = Date.now()
@@ -98,13 +136,27 @@ export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }
         level: 'info',
         screen: 'scan',
         operation: 'voice meal record',
-        metadata: getVoiceMetadata({ source: 'voice' })
+        metadata: getVoiceMetadata({ source: 'voice', mime_type: recorder.mimeType || recorderOptions.mimeType || null })
       })
 
+      recorder.onstart = () => {
+        logAppEvent('VOICE_RECORDING_STATE_CHANGED', {
+          level: 'info',
+          screen: 'scan',
+          operation: 'voice meal record',
+          metadata: getVoiceMetadata({ state: 'recording', mime_type: recorder.mimeType || recorderOptions.mimeType || null })
+        })
+      }
       recorder.ondataavailable = (event) => {
         if (event.data?.size > 0) audioChunksRef.current.push(event.data)
       }
       recorder.onstop = () => {
+        logAppEvent('VOICE_RECORDING_STATE_CHANGED', {
+          level: 'info',
+          screen: 'scan',
+          operation: 'voice meal record',
+          metadata: getVoiceMetadata({ state: 'stopped', mime_type: recorder.mimeType || recorderOptions.mimeType || null })
+        })
         mediaStreamRef.current?.getTracks?.().forEach((track) => track.stop())
         mediaStreamRef.current = null
       }
@@ -119,10 +171,15 @@ export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }
     } catch (err) {
       cleanupVoice()
       setError('Microphone access is blocked. You can type your meal instead.')
+      logAppEvent('VOICE_MIC_PERMISSION_DENIED', {
+        level: 'warn',
+        screen: 'scan',
+        operation: 'voice meal record',
+        metadata: getVoiceMetadata({ source: 'voice', error_name: err?.name || null })
+      })
       logSafeError('VOICE_TRANSCRIPTION_FAILED', err, { screen: 'scan', operation: 'start voice recording' })
     }
   }
-
   const stopRecording = async () => {
     const recorder = mediaRecorderRef.current
     if (!recorder || recorder.state !== 'recording') return
@@ -144,6 +201,13 @@ export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }
 
     const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' })
     const durationMs = Date.now() - recordingStartedAtRef.current
+    logAppEvent('VOICE_AUDIO_BLOB_READY', {
+      level: 'info',
+      screen: 'scan',
+      operation: 'voice meal record',
+      duration_ms: durationMs,
+      metadata: getVoiceMetadata({ audio_size_bytes: audioBlob.size, duration_ms: durationMs, mime_type: audioBlob.type || null, source: 'voice' })
+    })
     logAppEvent('VOICE_RECORDING_STOPPED', {
       level: 'info',
       screen: 'scan',
@@ -182,6 +246,13 @@ export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }
     try {
       setIsTranscribing(true)
       setError(null)
+      logAppEvent('VOICE_TRANSCRIPTION_REQUEST_SENT', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'voice transcription',
+        duration_ms: durationMs,
+        metadata: getVoiceMetadata({ audio_size_bytes: audioBlob.size, duration_ms: durationMs, mime_type: audioBlob.type || null, source: 'voice' })
+      })
       logAppEvent('VOICE_TRANSCRIPTION_STARTED', {
         level: 'info',
         screen: 'scan',
@@ -218,6 +289,12 @@ export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }
     const trimmed = description.trim()
     if (trimmed.length < 3) {
       setError('I need a little more detail. For example: 2 rotis, dal, rice, curd.')
+      logAppEvent('TEXT_MEAL_INPUT_VALIDATION_FAILED', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'analyze meal description',
+        metadata: { input_length: trimmed.length }
+      })
       return
     }
 
@@ -233,6 +310,12 @@ export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }
         metadata: { source, transcript_length: trimmed.length, is_online: navigator.onLine }
       })
       const analysis = await analyzeMealText(trimmed, { source })
+      logAppEvent('TEXT_MEAL_CLASSIFICATION_RESULT', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'analyze meal description',
+        metadata: { source, input_type: analysis?.input_type || null, loggable: analysis?.loggable !== false, input_length: trimmed.length }
+      })
       if (analysis?.loggable === false) {
         setResult(null)
         setError(analysis.message || friendlyClassificationMessage(analysis.input_type))
@@ -246,6 +329,12 @@ export default function DescribeMealModal({ isOpen, onClose, user, onMealSaved }
       }
 
       setResult({ ...analysis, source })
+      logAppEvent('TEXT_MEAL_RESULTSCREEN_OPENED', {
+        level: 'info',
+        screen: 'scan',
+        operation: 'analyze meal description',
+        metadata: { source, input_type: analysis?.input_type || 'meal', input_length: trimmed.length }
+      })
       logAppEvent('TEXT_MEAL_ANALYZE_SUCCESS', {
         level: 'info',
         screen: 'scan',
@@ -389,8 +478,31 @@ const formatTimer = (ms) => {
 const storePendingMeal = (result) => {
   sessionStorage.setItem(PENDING_MEAL_KEY, JSON.stringify({ result }))
 }
+
+const getSupportedRecorderOptions = (MediaRecorderCtor) => {
+  const mimeType = RECORDER_MIME_CANDIDATES.find((candidate) => {
+    try {
+      return MediaRecorderCtor.isTypeSupported?.(candidate)
+    } catch {
+      return false
+    }
+  })
+  return mimeType ? { mimeType } : {}
+}
+
+const getBrowserFamily = () => {
+  const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent || ''
+  if (/SamsungBrowser/i.test(userAgent)) return 'samsung-browser'
+  if (/EdgA|EdgiOS|Edg\//i.test(userAgent)) return 'edge'
+  if (/CriOS|Chrome/i.test(userAgent)) return 'chrome'
+  if (/Firefox|FxiOS/i.test(userAgent)) return 'firefox'
+  if (/Safari/i.test(userAgent)) return 'safari'
+  return 'unknown'
+}
+
 const getVoiceMetadata = (metadata = {}) => ({
   ...metadata,
   is_pwa: typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator?.standalone === true),
-  is_online: typeof navigator === 'undefined' ? true : navigator.onLine
+  is_online: typeof navigator === 'undefined' ? true : navigator.onLine,
+  browser_family: getBrowserFamily()
 })

@@ -23,6 +23,9 @@ Rules:
 - Never answer medical advice.
 - Do not create calories/macros unless input clearly describes food or drink.
 - If quantity is vague but food is clear, return low confidence and conservative assumptions.
+- Treat normal food shorthand as loggable. Examples: "roti dal chawal", "2 rotis dal rice curd", "rajma chawal", "poha", "paneer sandwich", "chicken biryani", "protein shake banana".
+- Treat clear drinks as beverage. Examples: "black coffee", "chai", "lassi", "protein shake".
+- Reject non-food text. Example: "I went to gym today" is non_food.
 - Use Indian food knowledge where relevant.
 - Do not include iodine/salt suggestions or medical claims.
 - Nutrients are rough AI estimates only; use null where uncertain.`
@@ -47,6 +50,24 @@ const nutrientProperties = {
   vitamin_k_ug: { type: ['number', 'null'] }
 }
 const nutrientKeys = Object.keys(nutrientProperties)
+
+const FOOD_TERMS = [
+  'roti', 'rotis', 'chapati', 'dal', 'dhal', 'rice', 'chawal', 'curd', 'dahi', 'rajma', 'poha',
+  'paneer', 'sandwich', 'chicken', 'biryani', 'banana', 'shake', 'paratha', 'idli', 'dosa',
+  'upma', 'khichdi', 'sabzi', 'sabji', 'chole', 'bhature', 'egg', 'eggs', 'oats', 'salad',
+  'soup', 'pasta', 'maggi', 'noodles', 'fish', 'mutton', 'tofu', 'sprouts', 'protein'
+]
+const BEVERAGE_TERMS = ['coffee', 'tea', 'chai', 'lassi', 'juice', 'milk', 'smoothie', 'shake', 'water']
+
+const getFoodHint = (description: string) => {
+  const normalized = description.toLowerCase().replace(/[^a-z0-9\s]/g, ' ')
+  const tokens = normalized.split(/\s+/).filter(Boolean)
+  const hasFood = tokens.some((token) => FOOD_TERMS.includes(token))
+  const hasBeverage = tokens.some((token) => BEVERAGE_TERMS.includes(token))
+  if (hasBeverage && !hasFood) return 'likely_beverage'
+  if (hasFood || hasBeverage) return 'likely_food_or_drink'
+  return 'unknown'
+}
 
 const textMealSchema = {
   type: 'object',
@@ -210,6 +231,7 @@ Deno.serve(async (request) => {
 
   const description = typeof payload.description === 'string' ? payload.description.trim() : ''
   const source = payload.source === 'voice_transcript' ? 'voice_transcript' : 'text'
+  const foodHint = getFoodHint(description)
   if (description.length < 3) {
     return jsonResponse({ loggable: false, input_type: 'unclear_food', message: 'I need a little more detail. For example: 2 rotis, dal, rice, curd.' })
   }
@@ -223,7 +245,7 @@ Deno.serve(async (request) => {
       model: OPENAI_TEXT_MEAL_MODEL,
       input: [{ role: 'user', content: [
         { type: 'input_text', text: TEXT_MEAL_PROMPT },
-        { type: 'input_text', text: `Source: ${source}\nMeal description: ${description}` }
+        { type: 'input_text', text: `Source: ${source}\nFood hint: ${foodHint}\nMeal description: ${description}` }
       ] }],
       text: { format: { type: 'json_schema', name: 'text_meal_analysis', strict: true, schema: textMealSchema } }
     })
@@ -237,7 +259,7 @@ Deno.serve(async (request) => {
   try {
     const data = await openAIResponse.json()
     const parsed = parseOpenAIResponse(data, source)
-    console.info('[CalCheck] ANALYZE_MEAL_TEXT_DURATION_MS', { duration_ms: Date.now() - startedAt, model: OPENAI_TEXT_MEAL_MODEL, input_type: parsed.input_type, loggable: parsed.loggable })
+    console.info('[CalCheck] ANALYZE_MEAL_TEXT_DURATION_MS', { duration_ms: Date.now() - startedAt, model: OPENAI_TEXT_MEAL_MODEL, input_type: parsed.input_type, loggable: parsed.loggable, food_hint: foodHint })
     return jsonResponse(parsed)
   } catch (error) {
     console.error('[CalCheck] ANALYZE_MEAL_TEXT_FAILED', { message: error instanceof Error ? error.message : 'Unknown parse error', duration_ms: Date.now() - startedAt, model: OPENAI_TEXT_MEAL_MODEL })
